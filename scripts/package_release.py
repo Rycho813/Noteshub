@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = (
     "Dockerfile", ".dockerignore", "docker-compose.yml", "docker-compose.https.yml",
     ".env.example", "requirements.txt", "constraints.txt", "README.md",
-    "deploy/Caddyfile", "docs/deployment.md", "docs/deployment-validation.md",
+    "deploy/Caddyfile", "deploy/noteshub-backup.service", "deploy/noteshub-backup.timer",
+    "docs/deployment.md", "docs/deployment-validation.md", "docs/backup-operations.md",
     "scripts/backup.sh", "scripts/restore.sh",
 )
 

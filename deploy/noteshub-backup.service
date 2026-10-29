@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up NotesHub private data
+Requires=docker.service
+After=docker.service
+ConditionPathExists=/opt/noteshub/.env
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/noteshub
+Environment=COMPOSE_PROJECT_NAME=noteshub
+UMask=0077
+ExecStart=/bin/bash -c 'exec /bin/bash /opt/noteshub/scripts/backup.sh "/var/backups/noteshub/daily/noteshub-$$(TZ=Asia/Shanghai /usr/bin/date +%%Y%%m%%d-%%H%%M%%S).tar.gz"'
+TimeoutStartSec=30min

@@ -1,5 +1,7 @@
 # 部署准备与验收
 
+当前进度更新：用户已确认正式站点、Windows/iPhone 与核心功能验收通过；首次备份、Windows 副本校验、独立卷恢复及内容核对通过。每日备份安装、启用与维护见 [备份运维说明](backup-operations.md)。下文部署前检查和准备内容保留为历史记录。
+
 本文件是已获用户授权的部署方案，**不是已经执行了服务器部署**。目标为 `notes.rychoz.com`，复用现有宿主机 Caddy。服务器为腾讯云轻量应用服务器、新加坡、Ubuntu 24.04 LTS、x86_64、2 核/2GB/40GB SSD；检查时可用内存约 771MiB、磁盘可用约 25GB，Docker Compose 为 v2.32.4。
 
 既有服务为 FreshRSS（`rss.rychoz.com`）、RSSHub 和 Redis。Caddy 通过 systemd 使用 `/etc/caddy/Caddyfile`，监听 80/443；8000 未监听。`/opt/noteshub` 不存在，现有 Compose 项目为 `freshrss`、`rsshub`，可使用独立项目 `noteshub`。用户已确认下述部署范围；实际步骤仍由服务器终端执行，目前尚未核实线上启动或 DNS 变更。

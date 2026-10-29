@@ -1,6 +1,8 @@
 # Noteshub
 
-单人自托管的阅读笔记二次处理工作台。当前已完成电子书闭环：**单用户登录 → 书籍管理 → Markdown 导入预览/修正 → 二读自动保存与状态处理 → 整书 Markdown 导出**。Docker、可选 HTTPS 和备份恢复文件已准备；腾讯服务器尚未部署，纸书和 OCR 尚未开发。
+单人自托管的阅读笔记二次处理工作台。当前已完成电子书闭环：**单用户登录 → 书籍管理 → Markdown 导入预览/修正 → 二读自动保存与状态处理 → 整书 Markdown 导出**。已通过 Docker 部署到腾讯服务器并复用现有 Caddy 提供 HTTPS；纸书和 OCR 尚未开发。
+
+当前进度更新：用户已确认腾讯服务器 HTTPS、Windows/iPhone 访问与核心功能验收通过；首次备份已下载到 Windows 并校验，独立恢复卷逐字段与导出核对通过。每日自动备份配置及操作见 [备份运维说明](docs/backup-operations.md)，其服务器启用结果尚待核实。下面早期阶段的验证报告保留为历史记录。
 
 ## 启动 Web 应用
 
@@ -33,7 +35,7 @@ NOTESHUB_COOKIE_SECURE=false .venv/bin/python -m uvicorn noteshub.web:create_app
 
 ## Docker 与部署准备
 
-详见 [部署方案](docs/deployment.md)。已确认使用 `notes.rychoz.com`，复用宿主机 Caddy，保留 FreshRSS、RSSHub 和 Redis。当前改用 GitHub 中转源码，服务器从仓库拉取后构建；尚未执行服务器或 DNS 变更。
+详见 [部署方案](docs/deployment.md)。已部署到 `notes.rychoz.com`，复用宿主机 Caddy，保留 FreshRSS、RSSHub 和 Redis。源码通过 GitHub 中转，服务器拉取后构建；用户已确认 Windows/iPhone 和核心流程正常。
 
 - `docker-compose.yml` 只启动本应用，将端口绑定到服务器回环地址。应用以非 root 用户运行，只读镜像层，数据存入独立命名卷。
 - `docker-compose.https.yml` 是没有现成反向代理时的可选方案；已有 Caddy 时不要直接启动它抢占 80/443。

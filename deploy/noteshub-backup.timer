@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily NotesHub backup at 04:00 Asia/Shanghai
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1min
+Unit=noteshub-backup.service
+
+[Install]
+WantedBy=timers.target

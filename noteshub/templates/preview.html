@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+{% block title %}导入预览 · {{ book.title }}{% endblock %}
+{% block content %}
+<a class="back" href="/books/{{ book.id }}">← {{ book.title }}</a>
+<h1>检查导入内容</h1>
+<p>{{ upload.filename }} · 共 {{ preview.records|length }} 条 · <strong>待修正 {{ unresolved }} 条</strong></p>
+<p class="muted">请检查原文和一读评述。每条修改后请点击“保存修正”，确认导入后才生成正式笔记。临时预览从上传起保留 1 小时。</p>
+<div class="notice {% if unresolved %}error{% endif %}" role="status">
+  {% if unresolved %}仍有 {{ unresolved }} 条解析异常，请逐条修正后再确认。{% else %}所有记录均可确认，请检查内容后导入。{% endif %}
+</div>
+{% if unresolved %}
+<nav class="panel" aria-label="异常记录">
+  <strong>跳到异常：</strong>
+  {% for record in preview.records if record.needs_correction %}
+    <a class="issue-link" href="#record-{{ record.record_id }}">第 {{ record.record_id }} 条（行 {{ record.start_line }}）</a>
+  {% endfor %}
+</nav>
+{% endif %}
+{% for record in preview.records %}
+<article class="panel note {% if record.needs_correction %}invalid{% endif %}" id="record-{{ record.record_id }}">
+  <p class="eyebrow">第 {{ record.record_id }} 条 · 源文件行 {{ record.start_line }}–{{ record.end_line }}{% if record.corrected %} · 已手动修正{% endif %}</p>
+  {% if record.needs_correction %}<p class="notice error">{{ record.issue.message }}</p>{% endif %}
+  {% if not record.needs_correction %}
+    <h2>原文</h2><div class="text original">{{ record.original_text }}</div>
+    <h2>一读评述</h2><div class="text">{{ record.first_comment }}</div>
+  {% endif %}
+  <details {% if record.needs_correction %}open{% endif %}>
+    <summary>{% if record.needs_correction %}查看原始内容并修正{% else %}查看源内容 / 修改{% endif %}</summary>
+    <h3>原始内容</h3><pre class="raw">{{ record.raw_source }}</pre>
+    <form action="/books/{{ book.id }}/imports/{{ upload.id }}/records/{{ record.record_id }}" method="post" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>原文 <span class="muted">必填，不需要补最外层引号</span><textarea name="original_text" rows="5" required maxlength="50000">
+{{ record.original_text if record.original_text is not none else '' }}</textarea></label>
+      <label>一读评述 <span class="muted">可以留空</span><textarea name="first_comment" rows="4" maxlength="50000">
+{{ record.first_comment if record.first_comment is not none else '' }}</textarea></label>
+      <button class="secondary" type="submit">保存修正</button>
+    </form>
+  </details>
+</article>
+{% endfor %}
+<section class="panel actions">
+  <form action="/books/{{ book.id }}/imports/{{ upload.id }}/confirm" method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit" {% if not preview.can_confirm %}disabled{% endif %}>确认导入 {{ preview.records|length }} 条笔记</button>
+  </form>
+  <form action="/books/{{ book.id }}/imports/{{ upload.id }}/cancel" method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit" class="quiet">取消并清理本次上传</button>
+  </form>
+</section>
+{% endblock %}

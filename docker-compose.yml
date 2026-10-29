@@ -1,0 +1,28 @@
+services:
+  app:
+    image: noteshub:${NOTESHUB_IMAGE_TAG:-local}
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      NOTESHUB_DATA_DIR: /data
+      NOTESHUB_COOKIE_SECURE: ${NOTESHUB_COOKIE_SECURE:-true}
+    ports:
+      - "127.0.0.1:${NOTESHUB_HTTP_PORT:-8000}:8000"
+    volumes:
+      - data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16777216,mode=1777,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  data:

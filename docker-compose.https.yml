@@ -1,0 +1,40 @@
+# Use only after confirming that host ports 80/443 are free. An existing
+# reverse proxy should use the base Compose file instead of starting Caddy.
+services:
+  caddy:
+    image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+    restart: unless-stopped
+    environment:
+      NOTESHUB_DOMAIN: ${NOTESHUB_DOMAIN:?Set a real hostname before enabling HTTPS}
+      # Only container-local destinations bypass an optional outbound proxy.
+      # Preserve inherited exclusions; public ACME requests still use its proxy.
+      NO_PROXY: "${NO_PROXY:-},app,localhost,127.0.0.1"
+      no_proxy: "${no_proxy:-},app,localhost,127.0.0.1"
+    ports:
+      - "${NOTESHUB_TLS_BIND:-0.0.0.0}:${NOTESHUB_TLS_HTTP_PORT:-80}:80"
+      - "${NOTESHUB_TLS_BIND:-0.0.0.0}:${NOTESHUB_TLS_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=8388608,mode=1777,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:

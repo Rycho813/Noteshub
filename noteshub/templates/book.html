@@ -1,0 +1,72 @@
+{% extends 'base.html' %}
+{% block title %}{{ book.title }} · Noteshub{% endblock %}
+{% block scripts %}{% if current %}<script src="{{ url_for('static', path='review.js').path }}" defer></script>{% endif %}{% endblock %}
+{% block content %}
+<a class="back" href="/">← 书籍列表</a>
+<h1>{{ book.title }}</h1>
+{% if book.author %}<p class="muted">{{ book.author }}</p>{% endif %}
+{% if imported %}
+  <div class="book-toolbar">
+    <p>已完成 <strong id="book-progress">{{ done }}/{{ total }}</strong></p>
+    {% if current %}<button id="export-book" type="button" class="secondary" disabled>导出整书 Markdown</button>{% endif %}
+  </div>
+  <p class="muted" id="export-warning">{% if total > done %}仍有 {{ total - done }} 条待处理；导出会包含全部 {{ total }} 条笔记。{% else %}全部笔记已完成，导出包含整本书。{% endif %}</p>
+  {% if current %}
+  <section id="review-editor" class="panel"
+    data-save-url="/api/books/{{ book.id }}/notes/{{ current.id }}"
+    data-export-url="/books/{{ book.id }}/export" data-export-name="{{ export_name }}"
+    data-status="{{ current.status }}" data-csrf="{{ csrf }}" data-next-url="{{ next_url or '' }}">
+    <div class="note-heading">
+      <p class="eyebrow">笔记 {{ index + 1 }} / {{ total }}{% if current.manually_corrected %} · 导入时已手动修正{% endif %}</p>
+      <span id="note-status" class="status-badge">{{ '已完成' if current.status == 'done' else '待处理' }}</span>
+    </div>
+    <div class="review-columns">
+      <div class="reading-text">
+        <h2>原文</h2><div class="text original">{{ current.original_text }}</div>
+        <h2>一读评述</h2><div class="text">{{ current.first_comment }}</div>
+      </div>
+      <div class="review-input">
+        <label for="second-comment">二读评述 <span class="muted">纯文本，可以留空</span></label>
+        <textarea id="second-comment" name="second_comment" rows="12" maxlength="50000" disabled>
+{{ current.second_comment }}</textarea>
+        <div class="save-row">
+          <p id="save-status" role="status" aria-live="polite">正在准备编辑…</p>
+          <button id="save-now" type="button" class="quiet" disabled>立即保存</button>
+        </div>
+        <p id="login-hint" class="muted" hidden>请先复制未保存的文字，再<a href="/login" target="_blank" rel="noopener">重新登录</a>并刷新本页。</p>
+        <noscript><p class="notice error">二读编辑和自动保存需要启用 JavaScript。当前只能查看已保存内容及<a href="/books/{{ book.id }}/export">导出已保存的整书内容</a>。</p></noscript>
+      </div>
+    </div>
+    <div class="review-navigation">
+      {% if previous_url %}<a class="button-link secondary" href="{{ previous_url }}">上一条</a>{% else %}<span class="nav-disabled">上一条</span>{% endif %}
+      {% if next_url %}<a class="button-link secondary" href="{{ next_url }}">下一条</a>{% else %}<span class="nav-disabled">下一条</span>{% endif %}
+      <button id="complete-next" type="button" disabled>完成并继续</button>
+      <button id="restore-pending" type="button" class="quiet" {% if current.status != 'done' %}hidden{% endif %} disabled>恢复待处理</button>
+    </div>
+  </section>
+  {% endif %}
+  <details class="panel">
+    <summary>导入信息</summary>
+    <p class="muted">已成功导入 {{ total }} 条笔记。本书不能再次导入。</p>
+    <p><a href="/books/{{ book.id }}/source">下载原始 Markdown 文件</a></p>
+  </details>
+{% else %}
+  <section class="panel">
+    <h2>导入 Zotero 笔记</h2>
+    <p>上传后先检查解析结果。确认成功后，本书不再接受其他导入。</p>
+    <p class="muted">支持 UTF-8 的 .md 文件，最大 2 MiB；本阶段不读取 EPUB/PDF 原文件。</p>
+    <form action="/books/{{ book.id }}/imports" method="post" enctype="multipart/form-data" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Markdown 文件<input type="file" name="file" accept=".md,text/markdown,text/plain" required></label>
+      <button type="submit">上传并预览</button>
+    </form>
+  </section>
+  {% if previews %}
+  <section class="panel">
+    <h2>继续检查</h2>
+    {% for preview in previews %}<p><a href="/books/{{ book.id }}/imports/{{ preview.id }}">继续预览 {{ preview.filename }}</a></p>{% endfor %}
+    <p class="muted">临时预览从上传起保留 1 小时；重新上传会替换本次登录下这本书的旧预览。</p>
+  </section>
+  {% endif %}
+{% endif %}
+{% endblock %}

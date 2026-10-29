@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+{% block title %}我的书籍 · Noteshub{% endblock %}
+{% block content %}
+<p class="eyebrow">阅读工作台</p>
+<h1>我的书籍</h1>
+<div class="columns">
+  <section>
+    <form method="get" action="/" class="search">
+      <label class="grow">按书名查找<input type="search" name="q" value="{{ q }}" maxlength="200" placeholder="输入书名"></label>
+      <button type="submit" class="secondary">查找</button>
+    </form>
+    <div class="book-list">
+    {% for book in books %}
+      <a class="panel book-card" href="/books/{{ book.id }}">
+        <h2>{{ book.title }}</h2>
+        {% if book.author %}<p>{{ book.author }}</p>{% endif %}
+        <p class="muted">{% if book.imported %}已导入 {{ book.total }} 条笔记 · 已完成 {{ book.done }}/{{ book.total }}{% else %}尚未导入笔记{% endif %}</p>
+      </a>
+    {% else %}
+      <p class="empty">{% if q %}没有找到匹配书名。{% else %}从新建一本书开始。{% endif %}</p>
+    {% endfor %}
+    </div>
+  </section>
+  <section class="panel">
+    <h2>新建书籍</h2>
+    <form action="/books" method="post" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>书名 <span class="muted">必填</span><input name="title" required maxlength="200"></label>
+      <label>作者 <span class="muted">选填</span><input name="author" maxlength="200"></label>
+      <button type="submit">创建书籍</button>
+    </form>
+  </section>
+</div>
+{% endblock %}

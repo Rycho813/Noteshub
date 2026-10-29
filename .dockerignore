@@ -1,0 +1,8 @@
+**
+!Dockerfile
+!requirements.txt
+!constraints.txt
+!noteshub/
+!noteshub/**
+**/__pycache__/
+**/*.pyc

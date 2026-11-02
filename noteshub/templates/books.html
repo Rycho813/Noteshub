@@ -14,7 +14,7 @@
       <a class="panel book-card" href="/books/{{ book.id }}">
         <h2>{{ book.title }}</h2>
         {% if book.author %}<p>{{ book.author }}</p>{% endif %}
-        <p class="muted">{% if book.imported %}已导入 {{ book.total }} 条笔记 · 已完成 {{ book.done }}/{{ book.total }}{% else %}尚未导入笔记{% endif %}</p>
+        <p class="muted">{% if book.total %}共 {{ book.total }} 条笔记 · 已完成 {{ book.done }}/{{ book.total }}{% else %}尚无正式笔记{% endif %}</p>
       </a>
     {% else %}
       <p class="empty">{% if q %}没有找到匹配书名。{% else %}从新建一本书开始。{% endif %}</p>

@@ -4,7 +4,7 @@
 {% block content %}
 <a class="back" href="/books/{{ book.id }}">← {{ book.title }}</a>
 <h1>图片摘录</h1>
-<p>为《{{ book.title }}》准备来源图片。保存图片后，可进入识别与一读编辑；当前只保存草稿，尚不生成正式笔记。</p>
+<p>为《{{ book.title }}》准备来源图片。保存图片后可识别、校对和写一读，再确认归档为正式笔记。</p>
 <section class="panel" id="image-input" data-upload-url="/api/books/{{ book.id }}/image-drafts" data-csrf="{{ csrf }}">
   <h2>拍照或选择图片</h2>
   <p class="muted">完整图片先在设备上处理，只上传确认后的范围。支持 PNG/JPEG；HEIC 请先转换。原图最大 20 MiB、2400 万像素。</p>
@@ -66,4 +66,15 @@
   </article>
   {% else %}<p class="muted">暂无图片草稿。</p>{% endfor %}
 </section>
+{% if archived_images %}
+<section class="panel">
+  <h2>已归档来源（{{ archived_images|length }}）</h2>
+  <p class="muted">来源图片与识别历史长期保留。</p>
+  {% for image in archived_images %}
+  <article class="image-archive" id="draft-{{ image.id }}">
+    <p><a href="/books/{{ book.id }}?note={{ image.archived_note_id }}">查看正式笔记</a> · <a href="/books/{{ book.id }}/image-drafts/{{ image.id }}/edit">来源图片与识别记录（只读）</a></p>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
 {% endblock %}

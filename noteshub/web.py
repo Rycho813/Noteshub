@@ -280,6 +280,7 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
         with store.connection() as db:
             book = get_book(db, book_id)
             imported = db.execute("SELECT * FROM imports WHERE book_id = ?", (book_id,)).fetchone()
+            markdown_count = db.execute("SELECT COUNT(*) FROM notes WHERE book_id = ? AND source_type = 'zotero'", (book_id,)).fetchone()[0]
             notes = db.execute("SELECT id, status FROM notes WHERE book_id = ? ORDER BY sort_order", (book_id,)).fetchall()
             current = None
             index = 0
@@ -299,7 +300,7 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
             return f"/books/{book_id}?note={notes[position]['id']}"
         return render(
             request, "book.html", book=book, imported=imported, notes=notes, previews=previews,
-            current=current, index=index, total=len(notes),
+            current=current, index=index, total=len(notes), markdown_count=markdown_count,
             done=sum(item["status"] == "done" for item in notes),
             previous_url=note_url(index - 1) if index > 0 else None,
             next_url=note_url(index + 1) if index + 1 < len(notes) else None,
@@ -344,10 +345,13 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
         await asyncio.to_thread(store.cleanup)
         with store.connection() as db:
             book = get_book(db, book_id)
-            drafts = db.execute(
-                "SELECT * FROM image_drafts WHERE book_id = ? ORDER BY created_at DESC, rowid DESC", (book_id,),
+            images = db.execute(
+                "SELECT d.*, n.id AS archived_note_id FROM image_drafts d LEFT JOIN notes n ON n.image_draft_id = d.id "
+                "WHERE d.book_id = ? ORDER BY d.created_at DESC, d.rowid DESC", (book_id,),
             ).fetchall()
-        return render(request, "images.html", book=book, drafts=drafts)
+        return render(request, "images.html", book=book,
+                      drafts=[row for row in images if row['archived_note_id'] is None],
+                      archived_images=[row for row in images if row['archived_note_id'] is not None])
 
     @app.post("/api/books/{book_id}/image-drafts")
     async def upload_image_draft(request: Request, book_id: str):
@@ -387,7 +391,8 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
             with store.connection() as db:
                 db.execute("BEGIN")
                 row = db.execute(
-                    "SELECT * FROM image_drafts WHERE id = ? AND book_id = ? AND (editing_started = 1 OR expires_at > ?)",
+                    "SELECT * FROM image_drafts WHERE id = ? AND book_id = ? AND (editing_started = 1 OR expires_at > ? "
+                    "OR EXISTS (SELECT 1 FROM notes WHERE image_draft_id = image_drafts.id))",
                     (draft_id, book_id, int(time.time())),
                 ).fetchone()
                 if row is None:
@@ -408,6 +413,8 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
         async with read_form(request):
             with store.connection() as db:
                 db.execute("BEGIN IMMEDIATE")
+                if db.execute("SELECT 1 FROM notes WHERE image_draft_id = ? AND book_id = ?", (draft_id, book_id)).fetchone():
+                    raise HTTPException(409, "这张图片已归档，不能从草稿入口删除正式笔记的来源。")
                 if db.execute("SELECT 1 FROM ocr_runs r JOIN image_drafts d ON d.id = r.draft_id "
                               "WHERE d.id = ? AND d.book_id = ? AND r.state = 'running'", (draft_id, book_id)).fetchone():
                     raise HTTPException(409, "图片正在识别，请等待结束后再删除草稿。")

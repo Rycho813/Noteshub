@@ -187,7 +187,7 @@ COMPOSE_PROJECT_NAME=noteshub-restore NOTESHUB_HTTP_PORT=18000 docker compose up
 
 ## 回退与验收
 
-- 回退发布：旧电子书版本使用 schema v1；V2 图片草稿使用 schema v2，OCR 与一读草稿进一步升级为 schema v3。升级前先完整备份。v3 数据不能交给 v1/v2 程序，v2 数据也不能交给 v1 程序；需要回退时，用升级前备份恢复到独立空卷并核验，不能只回退镜像/代码。不要借回退删除正式数据卷。
+- 回退发布：旧电子书版本使用 schema v1；V2 图片草稿使用 schema v2，OCR 与一读草稿使用 schema v3，正式归档进一步升级为 schema v4。升级前先完整备份。v4 数据不能交给 v1/v2/v3 程序，v3 数据不能交给 v1/v2 程序，v2 数据也不能交给 v1 程序；需要回退时，用升级前备份恢复到独立空卷并核验，不能只回退镜像/代码。不要借回退删除正式数据卷。
 - 回退入口：只撤销新增笔记站点配置并验证后重载，保留 FreshRSS 原站点。DNS 与安全组变更也需记录原值。
 - 验收：FreshRSS 仍可用；未登录不能读取笔记或下载；Windows/iPhone 通过 HTTPS 登录；上传、修正、二读保存、刷新、状态、整书导出正常；Obsidian 实际打开；容器重启不丢数据；新卷恢复能读出原内容。
 

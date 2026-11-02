@@ -8,8 +8,8 @@ readonly marker=ocr-v2
 readonly volume=noteshub-v2-ocr-test_data
 command=${1:-help}
 case "$command" in
-  help) echo 'Usage: bash scripts/ocr_test.sh {preflight|build|account|up|check|network|enable-ocr|disable-ocr|summary|stop|down}'; exit 0 ;;
-  preflight|build|account|up|check|network|enable-ocr|disable-ocr|summary|stop|down) ;;
+  help) echo 'Usage: bash scripts/ocr_test.sh {preflight|build|backup|account|up|check|network|enable-ocr|disable-ocr|summary|stop|down}'; exit 0 ;;
+  preflight|build|backup|account|up|check|network|enable-ocr|disable-ocr|summary|stop|down) ;;
   *) echo 'Unknown command; no changes made.' >&2; exit 2 ;;
 esac
 release_sha=$(python3 scripts/check_release.py --digest)
@@ -82,6 +82,44 @@ case "$command" in
     credentials_metadata; image_ready
     "${compose[@]}" run --rm --no-deps app python -m noteshub.auth
     ;;
+  backup)
+    image_ready
+    if [ -n "$("${compose[@]}" ps --status running -q app)" ]; then
+      echo 'Stop the test app first. No backup or migration was performed.' >&2; exit 1
+    fi
+    backup_dir=${NOTESHUB_TEST_BACKUP_DIR:-/var/backups/noteshub-v2-ocr-test}
+    python3 - "$backup_dir" "$project_root" <<'PY'
+import os,stat,sys
+from pathlib import Path
+folder=Path(sys.argv[1])
+root=Path(sys.argv[2]).resolve()
+if not folder.is_absolute() or folder.is_symlink(): raise SystemExit('Use an absolute private backup directory outside the release.')
+folder.mkdir(mode=0o700,parents=True,exist_ok=True)
+metadata=folder.stat()
+if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077
+    or folder.resolve() == root or root in folder.resolve().parents):
+ raise SystemExit('Backup directory must be private, owned by the current user, and outside the release.')
+PY
+    umask 077
+    partial=$(mktemp "$backup_dir/before-step4-XXXXXXXX.tar.gz.partial")
+    trap 'rm -f -- "$partial"' EXIT
+    "${compose[@]}" run --rm --no-deps -T app python -m noteshub.maintenance backup > "$partial"
+    python3 - "$partial" <<'PY'
+import hashlib,json,sys,tarfile
+with tarfile.open(sys.argv[1],mode='r:gz') as archive:
+ manifest=json.load(archive.extractfile('manifest.json'))
+ for name,checksum in manifest['files'].items():
+  digest=hashlib.sha256()
+  with archive.extractfile(name) as content:
+   for block in iter(lambda:content.read(1024*1024),b''): digest.update(block)
+  if digest.hexdigest()!=checksum: raise SystemExit('Backup checksum verification failed; no migration performed.')
+print('Backup contents verified; no migration or OCR call performed.')
+PY
+    archive=${partial%.partial}
+    ln -- "$partial" "$archive"
+    sha256sum -- "$archive" > "$archive.sha256"
+    echo "BACKUP=$archive"
+    ;;
   up|enable-ocr|disable-ocr)
     credentials_metadata; image_ready
     if [ "$command" = enable-ocr ]; then export NOTESHUB_TEST_OCR_ENABLED=true; fi
@@ -107,9 +145,13 @@ if code not in (200,400,404,405): raise SystemExit("Unexpected HTTP response; do
   summary)
     "${compose[@]}" exec -T app python -c 'import sqlite3
 with sqlite3.connect("/data/noteshub.sqlite3") as db:
+ print("schema_version",db.execute("PRAGMA user_version").fetchone()[0])
  for table in ("books","image_drafts","notes","ocr_runs"): print(table,db.execute("SELECT COUNT(*) FROM "+table).fetchone()[0])
  print("OCR states:",db.execute("SELECT state,COUNT(*) FROM ocr_runs GROUP BY state").fetchall())
- print("Draft lengths/retention:",db.execute("SELECT length(original_text),length(first_comment),editing_started FROM image_drafts").fetchall())'
+ print("Draft lengths/retention:",db.execute("SELECT length(original_text),length(first_comment),editing_started FROM image_drafts").fetchall())
+ if db.execute("PRAGMA user_version").fetchone()[0] >= 4:
+  print("archived_image_notes",db.execute("SELECT COUNT(*) FROM notes WHERE source_type = ?",("image",)).fetchone()[0])
+  print("pending_image_drafts",db.execute("SELECT COUNT(*) FROM image_drafts d WHERE NOT EXISTS (SELECT 1 FROM notes n WHERE n.image_draft_id = d.id)").fetchone()[0])'
     ;;
   stop) "${compose[@]}" stop app ;;
   down) "${compose[@]}" down; echo "Test volume retained: $volume. No credentials or data removed." ;;

@@ -5,7 +5,7 @@
   if (!editor) return;
   const $ = id => document.getElementById(id);
   const original = $("draft-original"), comment = $("draft-comment");
-  const saveButton = $("draft-save"), recognize = $("draft-recognize");
+  const saveButton = $("draft-save"), recognize = $("draft-recognize"), archiveButton = $("draft-archive");
   const saveStatus = $("draft-save-status"), ocrStatus = $("draft-ocr-status");
   let state = null, revision = 0, saved = {original_text: original.value, first_comment: comment.value};
   let ready = false, inFlight = null, uncertain = null, moving = false, conflict = false;
@@ -20,12 +20,15 @@
   }
   function controls() {
     const firstRecognition = state?.ocr_state === "running" && revision === 0;
-    for (const field of [original,comment]) { field.disabled = !ready; field.readOnly = moving || firstRecognition; }
-    saveButton.disabled = !ready || moving || firstRecognition;
+    const archived = Boolean(state?.archived);
+    for (const field of [original,comment]) { field.disabled = !ready; field.readOnly = archived || moving || firstRecognition; }
+    saveButton.disabled = archived || !ready || moving || firstRecognition;
     saveButton.textContent = uncertain ? "重试保存" : "立即保存";
-    recognize.disabled = !ready || moving || Boolean(inFlight) || state?.ocr_state === "running" || conflict || editor.dataset.configured !== "true";
+    recognize.disabled = archived || !ready || moving || Boolean(inFlight) || state?.ocr_state === "running" || conflict || editor.dataset.configured !== "true";
     recognize.textContent = !state?.run_id ? "识别文字" : state.ocr_state === "failed" ? "重试识别（可能计费）" : "重新识别（可能计费）";
-    $("draft-adopt").disabled = !ready || moving || Boolean(inFlight) || state?.ocr_state === "running" || conflict;
+    $("draft-adopt").disabled = archived || !ready || moving || Boolean(inFlight) || state?.ocr_state === "running" || conflict;
+    archiveButton.disabled = archived || !ready || moving || Boolean(inFlight) || state?.ocr_state === "running" || conflict;
+    archiveButton.textContent = archived ? "已归档" : "完成一读并归档";
   }
   async function request(url, options = {}) {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15000);
@@ -56,6 +59,13 @@
     $("draft-first-text").textContent = next.first_ocr_text || "";
     $("draft-latest").hidden = next.latest_ocr_text === null;
     $("draft-latest-text").textContent = next.latest_ocr_text || "";
+    $("draft-scope").hidden = next.archived;
+    const link = $("draft-note-link");
+    link.hidden = !next.archived;
+    if (next.archived) {
+      link.setAttribute("href",next.note_url);
+      $("draft-archive-status").textContent = "已归档 · " + (next.note_status === "done" ? "二读已完成" : "待二读") + "。来源图片与识别记录长期保留，原文和一读只读。";
+    }
     controls();
   }
   function apply(next, force = false) {
@@ -66,7 +76,7 @@
     } else if (!inFlight && next.revision !== revision) {
       conflict = true;
       clearTimeout(timer);
-      message("服务器草稿已有更新，当前输入未覆盖。请复制未保存内容，再刷新核对。",true);
+      message(next.archived ? "草稿已在另一页面归档，当前未保存输入未写入正式笔记，请复制留存后查看。" : "服务器草稿已有更新，当前输入未覆盖。请复制未保存内容，再刷新核对。",true);
     }
     showOCR(next);
   }
@@ -175,6 +185,24 @@
     await flush();
     original.value = text;
     await flush();
+  }));
+  archiveButton.addEventListener("click",() => action(async () => {
+    if (!original.value.trim()) {
+      $("draft-archive-status").textContent = "请先填写或校对原文，原文不能为空。";
+      return;
+    }
+    await flush();
+    try {
+      const next = await post("/archive",{revision:String(revision)});
+      if (!next.archived || !next.note_url) throw new Error("归档结果未确认，请刷新状态核对。");
+      apply(next,true);
+      message("已归档");
+    } catch (error) {
+      // A committed archive whose reply was lost is recovered by a safe GET.
+      await refresh().catch(() => {});
+      if (state?.archived) message("已归档");
+      else $("draft-archive-status").textContent = "归档未确认：" + error.message + " 已保存草稿仍保留，可刷新状态或重试归档。";
+    }
   }));
   document.addEventListener("click",event => {
     const link = event.target.closest("a[href]");

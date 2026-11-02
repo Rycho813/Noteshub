@@ -93,6 +93,36 @@ CREATE UNIQUE INDEX ocr_single_active ON ocr_runs((1)) WHERE state = 'running';
 PRAGMA user_version = 3;
 """
 
+ARCHIVE_SCHEMA = """
+CREATE UNIQUE INDEX image_draft_identity ON image_drafts(id, book_id);
+CREATE TABLE notes_v4 (
+    id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES books(id),
+    import_id TEXT REFERENCES imports(id),
+    source_type TEXT NOT NULL DEFAULT 'zotero' CHECK(source_type IN ('zotero', 'image')),
+    original_text TEXT NOT NULL, first_comment TEXT NOT NULL,
+    second_comment TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'done')),
+    raw_source TEXT NOT NULL, sort_order INTEGER NOT NULL,
+    start_line INTEGER NOT NULL, end_line INTEGER NOT NULL,
+    manually_corrected INTEGER NOT NULL CHECK(manually_corrected IN (0, 1)),
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    image_draft_id TEXT UNIQUE,
+    UNIQUE(book_id, sort_order),
+    FOREIGN KEY(image_draft_id, book_id) REFERENCES image_drafts(id, book_id) ON DELETE RESTRICT,
+    CHECK((source_type = 'zotero' AND import_id IS NOT NULL AND image_draft_id IS NULL)
+       OR (source_type = 'image' AND import_id IS NULL AND image_draft_id IS NOT NULL))
+);
+INSERT INTO notes_v4
+    (id, book_id, import_id, source_type, original_text, first_comment, second_comment,
+     status, raw_source, sort_order, start_line, end_line, manually_corrected, created_at, updated_at)
+SELECT id, book_id, import_id, source_type, original_text, first_comment, second_comment,
+       status, raw_source, sort_order, start_line, end_line, manually_corrected, created_at, updated_at
+FROM notes;
+DROP TABLE notes;
+ALTER TABLE notes_v4 RENAME TO notes;
+PRAGMA user_version = 4;
+"""
+
 
 class ImportConflict(ValueError):
     pass
@@ -117,7 +147,10 @@ class Store:
                 version = 2
             if version == 2:
                 db.executescript("BEGIN IMMEDIATE;" + OCR_SCHEMA + "COMMIT;")
-            elif version != 3:
+                version = 3
+            if version == 3:
+                db.executescript("BEGIN IMMEDIATE;" + ARCHIVE_SCHEMA + "COMMIT;")
+            elif version != 4:
                 raise RuntimeError(f"不支持的数据库版本：{version}")
         self.cleanup()
         self.recover_sources()
@@ -146,7 +179,8 @@ class Store:
             db.execute("UPDATE ocr_runs SET state = 'failed', error_code = 'Interrupted', finished_at = ? "
                        "WHERE state = 'running' AND started_at <= ?", (now, now - 120))
             db.execute("DELETE FROM image_drafts WHERE editing_started = 0 AND expires_at <= ? "
-                       "AND NOT EXISTS (SELECT 1 FROM ocr_runs WHERE draft_id = image_drafts.id AND state = 'running')", (now,))
+                       "AND NOT EXISTS (SELECT 1 FROM ocr_runs WHERE draft_id = image_drafts.id AND state = 'running') "
+                       "AND NOT EXISTS (SELECT 1 FROM notes WHERE image_draft_id = image_drafts.id)", (now,))
         # Remove only files unreferenced by committed rows. A write lock also
         # prevents racing a draft writer between file creation and commit.
         with self.connection() as db:
@@ -167,7 +201,8 @@ class Store:
                 if not db.execute("SELECT 1 FROM books WHERE id = ?", (book_id,)).fetchone():
                     raise LookupError("书籍不存在。")
                 existing = db.execute(
-                    "SELECT id FROM image_drafts WHERE book_id = ? AND sha256 = ? AND (editing_started = 1 OR expires_at > ?)",
+                    "SELECT id FROM image_drafts WHERE book_id = ? AND sha256 = ? AND (editing_started = 1 OR expires_at > ? "
+                    "OR EXISTS (SELECT 1 FROM notes WHERE image_draft_id = image_drafts.id))",
                     (book_id, checksum, int(time.time())),
                 ).fetchone()
                 if existing:
@@ -254,13 +289,14 @@ class Store:
                     (import_id, book_id, row["filename"], preview.sha256,
                      destination.name, "curly-quotes-v1", now),
                 )
+                offset = db.execute("SELECT COALESCE(MAX(sort_order) + 1, 0) FROM notes WHERE book_id = ?", (book_id,)).fetchone()[0]
                 db.executemany(
                     """INSERT INTO notes
                     (id, book_id, import_id, original_text, first_comment, raw_source,
                      sort_order, start_line, end_line, manually_corrected, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     [(uuid.uuid4().hex, book_id, import_id, note.original_text,
-                      note.first_comment, note.raw_source, index, note.start_line,
+                      note.first_comment, note.raw_source, index + offset, note.start_line,
                       note.end_line, int(note.manually_corrected), now, now)
                      for index, note in enumerate(notes)],
                 )

@@ -19,7 +19,8 @@ class DraftConflict(ValueError):
 
 def find_draft(db, book_id, draft_id):
     row = db.execute(
-        'SELECT * FROM image_drafts WHERE id = ? AND book_id = ? AND (editing_started = 1 OR expires_at > ?)',
+        'SELECT * FROM image_drafts WHERE id = ? AND book_id = ? AND (editing_started = 1 OR expires_at > ? '
+        'OR EXISTS (SELECT 1 FROM notes WHERE image_draft_id = image_drafts.id))',
         (draft_id, book_id, int(time.time())),
     ).fetchone()
     if row is None:
@@ -32,9 +33,15 @@ def draft_state(db, book_id, draft_id):
     latest = db.execute('SELECT * FROM ocr_runs WHERE draft_id = ? ORDER BY rowid DESC LIMIT 1', (draft_id,)).fetchone()
     first = db.execute("SELECT text FROM ocr_runs WHERE draft_id = ? AND state = 'succeeded' ORDER BY rowid LIMIT 1", (draft_id,)).fetchone()
     last_success = db.execute("SELECT text FROM ocr_runs WHERE draft_id = ? AND state = 'succeeded' ORDER BY rowid DESC LIMIT 1", (draft_id,)).fetchone()
+    archived = db.execute('SELECT id, status, created_at FROM notes WHERE image_draft_id = ?', (draft_id,)).fetchone()
     return {
         'id': row['id'], 'original_text': row['original_text'], 'first_comment': row['first_comment'],
         'revision': row['revision'], 'editing_started': bool(row['editing_started']),
+        'archived': archived is not None,
+        'note_id': archived['id'] if archived else None,
+        'note_url': f"/books/{book_id}?note={archived['id']}" if archived else None,
+        'note_status': archived['status'] if archived else None,
+        'archived_at': archived['created_at'] if archived else None,
         'ocr_state': latest['state'] if latest else 'idle', 'run_id': latest['id'] if latest else '',
         'first_ocr_text': first['text'] if first else None,
         'latest_ocr_text': last_success['text'] if last_success else None,
@@ -67,6 +74,10 @@ class DraftService:
             db.execute('BEGIN IMMEDIATE')
             row = find_draft(db, book_id, draft_id)
             same = row['original_text'] == original and row['first_comment'] == comment
+            if db.execute('SELECT 1 FROM notes WHERE image_draft_id = ?', (draft_id,)).fetchone():
+                if not same:
+                    raise DraftConflict('这条内容已归档，不能再修改来源草稿。当前输入仍保留，请查看正式笔记。')
+                return draft_state(db, book_id, draft_id)
             if row['revision'] != revision and not same:
                 raise DraftConflict('草稿已在另一页面更新。当前输入仍保留，请复制后刷新核对，系统不会覆盖较新的内容。')
             if not same:
@@ -78,12 +89,15 @@ class DraftService:
 
     def claim(self, book_id, draft_id, previous):
         # Check existence/ownership before reading any credentials.
-        self.state(book_id, draft_id)
+        if self.state(book_id, draft_id)['archived']:
+            raise DraftConflict('已归档的来源不能重新识别，请查看正式笔记。')
         self.client.prepare()
         now = int(time.time())
         with self.store.connection() as db:
             db.execute('BEGIN IMMEDIATE')
             find_draft(db, book_id, draft_id)
+            if db.execute('SELECT 1 FROM notes WHERE image_draft_id = ?', (draft_id,)).fetchone():
+                raise DraftConflict('已归档的来源不能重新识别，请查看正式笔记。')
             db.execute("UPDATE ocr_runs SET state = 'failed', error_code = 'Interrupted', finished_at = ? "
                        "WHERE state = 'running' AND started_at <= ?", (now, now - 120))
             latest = db.execute('SELECT id, state FROM ocr_runs WHERE draft_id = ? ORDER BY rowid DESC LIMIT 1', (draft_id,)).fetchone()
@@ -98,19 +112,50 @@ class DraftService:
             db.execute('UPDATE image_drafts SET editing_started = 1 WHERE id = ?', (draft_id,))
         return run_id
 
+    def read_image(self, row):
+        if row is None or not re.fullmatch(r'images/[0-9a-f]{32}\.(png|jpg)', row['file_path']):
+            raise OCRFailure('ImageUnavailable')
+        try:
+            raw = (self.store.root / row['file_path']).read_bytes()
+        except OSError:
+            raise OCRFailure('ImageUnavailable') from None
+        if len(raw) > self.store.settings.max_image_bytes or len(raw) != row['byte_size'] or hashlib.sha256(raw).hexdigest() != row['sha256']:
+            raise OCRFailure('ImageUnavailable')
+        return raw
+
     def image_bytes(self, draft_id):
         with self.store.connection() as db:
             db.execute('BEGIN')
             row = db.execute('SELECT * FROM image_drafts WHERE id = ?', (draft_id,)).fetchone()
-            if row is None or not re.fullmatch(r'images/[0-9a-f]{32}\.(png|jpg)', row['file_path']):
-                raise OCRFailure('ImageUnavailable')
-            try:
-                raw = (self.store.root / row['file_path']).read_bytes()
-            except OSError:
-                raise OCRFailure('ImageUnavailable') from None
-            if len(raw) > self.store.settings.max_image_bytes or len(raw) != row['byte_size'] or hashlib.sha256(raw).hexdigest() != row['sha256']:
-                raise OCRFailure('ImageUnavailable')
-            return raw
+            return self.read_image(row)
+
+    def archive(self, book_id, draft_id, revision):
+        """A single commit links a frozen draft and its history to one note."""
+        with self.store.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = find_draft(db, book_id, draft_id)
+            if db.execute('SELECT 1 FROM notes WHERE image_draft_id = ?', (draft_id,)).fetchone():
+                return draft_state(db, book_id, draft_id)  # Lost reply / double click.
+            if row['revision'] != revision:
+                raise DraftConflict('草稿版本已更新，请先保存并刷新核对后再归档。')
+            if not row['original_text'].strip():
+                raise ValueError('请先填写或校对原文，原文不能为空。')
+            if db.execute("SELECT 1 FROM ocr_runs WHERE draft_id = ? AND state = 'running'", (draft_id,)).fetchone():
+                raise DraftConflict('正在识别，请等待结果后再归档。')
+            self.read_image(row)
+            first = db.execute("SELECT text FROM ocr_runs WHERE draft_id = ? AND state = 'succeeded' ORDER BY rowid LIMIT 1", (draft_id,)).fetchone()
+            raw_source = first['text'] if first else row['original_text']
+            order = db.execute('SELECT COALESCE(MAX(sort_order) + 1, 0) FROM notes WHERE book_id = ?', (book_id,)).fetchone()[0]
+            now = int(time.time())
+            db.execute(
+                "INSERT INTO notes (id, book_id, import_id, source_type, original_text, first_comment, raw_source, "
+                "sort_order, start_line, end_line, manually_corrected, created_at, updated_at, image_draft_id) "
+                "VALUES (?, ?, NULL, 'image', ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)",
+                (uuid.uuid4().hex, book_id, row['original_text'], row['first_comment'], raw_source, order,
+                 int(first is None or raw_source != row['original_text']), now, now, draft_id),
+            )
+            db.execute('UPDATE image_drafts SET editing_started = 1, revision = revision + 1, updated_at = ? WHERE id = ?', (now, draft_id))
+            return draft_state(db, book_id, draft_id)
 
     def finish(self, run_id, result=None, code='InternalError'):
         with self.store.connection() as db:
@@ -169,6 +214,8 @@ def install_routes(app, service, *, render, require_session, read_form, field):
             raise HTTPException(404, str(exc))
         except DraftConflict as exc:
             raise HTTPException(409, str(exc))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
         except OCRFailure as exc:
             raise HTTPException(503, str(exc))
         except (OSError, sqlite3.Error):
@@ -213,3 +260,12 @@ def install_routes(app, service, *, render, require_session, read_form, field):
             run_id = await operation(service.claim, book_id, draft_id, previous)
         service.launch(run_id, draft_id)
         return JSONResponse({'run_id': run_id, 'ocr_state': 'running'}, status_code=202)
+
+    @app.post('/api/books/{book_id}/image-drafts/{draft_id}/archive')
+    async def archive(request: Request, book_id: str, draft_id: str):
+        async with read_form(request) as form:
+            revision = field(form, 'revision', max_length=20)
+            if not revision.isascii() or not revision.isdecimal():
+                raise HTTPException(422, '草稿版本无效，请刷新核对。')
+            state = await operation(service.archive, book_id, draft_id, int(revision))
+        return JSONResponse(state)

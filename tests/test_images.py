@@ -159,7 +159,7 @@ class ImageTests(WebCase):
         Store(self.settings)
         Store(self.settings)  # Startup migration is repeatable.
         with self.store.connection() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],3)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],4)
             self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM notes')],[tuple(row) for row in before])
         self.assertEqual(self.client.get(self.book+'/export').content,export)
         self.assertEqual(self.upload_image().status_code,201)
@@ -221,7 +221,7 @@ class ImageTests(WebCase):
             restore(root,io.BytesIO(archive.getvalue()))
             migrated = Store(Settings(root))
             with migrated.connection() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],3)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],4)
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM books').fetchone()[0],1)
 
 

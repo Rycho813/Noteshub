@@ -31,8 +31,8 @@ def _allowed(name: str) -> bool:
 def _validate(root: Path, db: sqlite3.Connection) -> list[str]:
     load_account(root)
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (1, 2, 3):
-        raise ValueError("备份工具仅支持数据库 schema v1/v2/v3。")
+    if version not in (1, 2, 3, 4):
+        raise ValueError("备份工具仅支持数据库 schema v1/v2/v3/v4。")
     if db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
         raise ValueError("数据库完整性检查失败。")
     if db.execute("PRAGMA foreign_key_check").fetchall():

@@ -6,7 +6,7 @@
 <h1>{{ book.title }}</h1>
 {% if book.author %}<p class="muted">{{ book.author }}</p>{% endif %}
 <p><a class="button-link" href="/books/{{ book.id }}/images">图片摘录 · 上传与草稿</a></p>
-{% if imported %}
+{% if total %}
   <div class="book-toolbar">
     <p>已完成 <strong id="book-progress">{{ done }}/{{ total }}</strong></p>
     {% if current %}<button id="export-book" type="button" class="secondary" disabled>导出整书 Markdown</button>{% endif %}
@@ -18,13 +18,14 @@
     data-export-url="/books/{{ book.id }}/export" data-export-name="{{ export_name }}"
     data-status="{{ current.status }}" data-csrf="{{ csrf }}" data-next-url="{{ next_url or '' }}">
     <div class="note-heading">
-      <p class="eyebrow">笔记 {{ index + 1 }} / {{ total }}{% if current.manually_corrected %} · 导入时已手动修正{% endif %}</p>
+      <p class="eyebrow">笔记 {{ index + 1 }} / {{ total }}{% if current.manually_corrected %} · 原文已手动修正{% endif %}</p>
       <span id="note-status" class="status-badge">{{ '已完成' if current.status == 'done' else '待处理' }}</span>
     </div>
     <div class="review-columns">
       <div class="reading-text">
         <h2>原文</h2><div class="text original">{{ current.original_text }}</div>
         <h2>一读评述</h2><div class="text">{{ current.first_comment }}</div>
+        {% if current.source_type == 'image' %}<p><a href="/books/{{ book.id }}/image-drafts/{{ current.image_draft_id }}/edit">查看来源图片与识别记录</a></p>{% endif %}
       </div>
       <div class="review-input">
         <label for="second-comment">二读评述 <span class="muted">纯文本，可以留空</span></label>
@@ -46,15 +47,17 @@
     </div>
   </section>
   {% endif %}
+{% endif %}
+{% if imported %}
   <details class="panel">
     <summary>导入信息</summary>
-    <p class="muted">已成功导入 {{ total }} 条笔记。本书不能再次导入。</p>
+    <p class="muted">已成功导入 {{ markdown_count }} 条 Markdown 笔记。本书不能再次导入 Markdown，仍可追加图片摘录。</p>
     <p><a href="/books/{{ book.id }}/source">下载原始 Markdown 文件</a></p>
   </details>
 {% else %}
   <section class="panel">
     <h2>导入 Zotero 笔记</h2>
-    <p>上传后先检查解析结果。确认成功后，本书不再接受其他导入。</p>
+    <p>上传后先检查解析结果。每本书只接受一次 Markdown 导入，图片摘录可持续追加。</p>
     <p class="muted">支持 UTF-8 的 .md 文件，最大 2 MiB；本阶段不读取 EPUB/PDF 原文件。</p>
     <form action="/books/{{ book.id }}/imports" method="post" enctype="multipart/form-data" class="stack">
       <input type="hidden" name="csrf" value="{{ csrf }}">

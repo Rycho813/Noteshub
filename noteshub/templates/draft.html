@@ -4,7 +4,7 @@
 {% block content %}
 <a class="back" href="/books/{{ book.id }}/images">← 图片草稿</a>
 <h1>识别与一读</h1>
-<p>《{{ book.title }}》 · 本页保存草稿，暂不计入正式笔记和二读进度。</p>
+<p id="draft-scope" {% if draft.archived %}hidden{% endif %}>《{{ book.title }}》 · 草稿确认归档后，才计入正式笔记。</p>
 <section class="panel" id="draft-editor" data-api="/api/books/{{ book.id }}/image-drafts/{{ draft.id }}"
   data-context="/api/books/{{ book.id }}/image-drafts/context" data-configured="{{ 'true' if ocr_configured else 'false' }}">
   <p class="muted">进入编辑后，图片和草稿长期保留，不再按 7 天自动清理。请定期完整备份。</p>
@@ -48,5 +48,10 @@
     <summary>首次成功识别的原始结果（保留不变）</summary>
     <pre id="draft-first-text" class="raw"></pre>
   </details>
+  <div class="review-navigation">
+    <button id="draft-archive" type="button" disabled>完成一读并归档</button>
+    <a id="draft-note-link" class="button-link" {% if draft.archived %}href="{{ draft.note_url }}"{% else %}hidden{% endif %}>查看已归档笔记</a>
+  </div>
+  <p id="draft-archive-status" role="status" aria-live="polite">{% if draft.archived %}已归档，来源内容只读。{% else %}原文必填，一读可留空。归档后原文和一读作为正式笔记保存，来源草稿转为只读。{% endif %}</p>
 </section>
 {% endblock %}

@@ -12,6 +12,10 @@ class Settings:
     max_upload_bytes: int = 2 * 1024 * 1024
     preview_seconds: int = 3600
     session_seconds: int = 12 * 3600
+    max_image_bytes: int = 5 * 1024 * 1024
+    max_image_pixels: int = 12_000_000
+    max_image_side: int = 6000
+    image_draft_seconds: int = 7 * 24 * 3600
 
     @classmethod
     def from_env(cls):

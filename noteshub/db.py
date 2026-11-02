@@ -1,4 +1,4 @@
-"""SQLite schema v1 and transactional import storage.
+"""Versioned SQLite storage for imports and private image drafts.
 
 SQLite's standard-library driver is sufficient for the current three core
 entities. Each connection enables foreign keys; writes serialize explicitly.
@@ -6,6 +6,7 @@ entities. Each connection enables foreign keys; writes serialize explicitly.
 
 from contextlib import contextmanager
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -57,6 +58,41 @@ INSERT INTO login_guard VALUES (1, 0, 0);
 PRAGMA user_version = 1;
 """
 
+IMAGE_SCHEMA = """
+CREATE TABLE image_drafts (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL REFERENCES books(id),
+    file_path TEXT NOT NULL UNIQUE,
+    sha256 TEXT NOT NULL,
+    media_type TEXT NOT NULL CHECK(media_type IN ('image/png', 'image/jpeg')),
+    byte_size INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+    UNIQUE(book_id, sha256)
+);
+CREATE INDEX image_drafts_expiry ON image_drafts(expires_at);
+PRAGMA user_version = 2;
+"""
+
+OCR_SCHEMA = """
+ALTER TABLE image_drafts ADD COLUMN editing_started INTEGER NOT NULL DEFAULT 0
+    CHECK(editing_started IN (0, 1));
+ALTER TABLE image_drafts ADD COLUMN original_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE image_drafts ADD COLUMN first_comment TEXT NOT NULL DEFAULT '';
+ALTER TABLE image_drafts ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE image_drafts ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE ocr_runs (
+    id TEXT PRIMARY KEY,
+    draft_id TEXT NOT NULL REFERENCES image_drafts(id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK(state IN ('running', 'succeeded', 'failed')),
+    started_at INTEGER NOT NULL, finished_at INTEGER,
+    text TEXT, response_json TEXT, request_id TEXT NOT NULL DEFAULT '',
+    error_code TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX ocr_runs_draft ON ocr_runs(draft_id);
+CREATE UNIQUE INDEX ocr_single_active ON ocr_runs((1)) WHERE state = 'running';
+PRAGMA user_version = 3;
+"""
+
 
 class ImportConflict(ValueError):
     pass
@@ -67,13 +103,21 @@ class Store:
         self.settings = settings
         self.root = settings.data_dir
         self.sources = self.root / "sources"
+        self.images = self.root / "images"
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.sources.mkdir(exist_ok=True, mode=0o700)
+        self.images.mkdir(exist_ok=True, mode=0o700)
         with self.connection() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version == 0:
                 db.executescript("BEGIN IMMEDIATE;" + SCHEMA + "COMMIT;")
-            elif version != 1:
+                version = 1
+            if version == 1:
+                db.executescript("BEGIN IMMEDIATE;" + IMAGE_SCHEMA + "COMMIT;")
+                version = 2
+            if version == 2:
+                db.executescript("BEGIN IMMEDIATE;" + OCR_SCHEMA + "COMMIT;")
+            elif version != 3:
                 raise RuntimeError(f"不支持的数据库版本：{version}")
         self.cleanup()
         self.recover_sources()
@@ -98,6 +142,65 @@ class Store:
         with self.connection() as db:
             db.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,))
             db.execute("DELETE FROM previews WHERE expires_at <= ?", (now,))
+            # Never replay a possibly charged request after a crash/timeout.
+            db.execute("UPDATE ocr_runs SET state = 'failed', error_code = 'Interrupted', finished_at = ? "
+                       "WHERE state = 'running' AND started_at <= ?", (now, now - 120))
+            db.execute("DELETE FROM image_drafts WHERE editing_started = 0 AND expires_at <= ? "
+                       "AND NOT EXISTS (SELECT 1 FROM ocr_runs WHERE draft_id = image_drafts.id AND state = 'running')", (now,))
+        # Remove only files unreferenced by committed rows. A write lock also
+        # prevents racing a draft writer between file creation and commit.
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            retained = {row[0] for row in db.execute("SELECT file_path FROM image_drafts")}
+            for path in self.images.iterdir():
+                if re.fullmatch(r"[0-9a-f]{32}\.(png|jpg)", path.name) and f"images/{path.name}" not in retained:
+                    path.unlink(missing_ok=True)
+
+    def save_image_draft(self, book_id, raw, metadata):
+        """Idempotent per book/content; never create notes or touch imports."""
+        checksum = hashlib.sha256(raw).hexdigest()
+        destination = None
+        created = False
+        try:
+            with self.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                if not db.execute("SELECT 1 FROM books WHERE id = ?", (book_id,)).fetchone():
+                    raise LookupError("书籍不存在。")
+                existing = db.execute(
+                    "SELECT id FROM image_drafts WHERE book_id = ? AND sha256 = ? AND (editing_started = 1 OR expires_at > ?)",
+                    (book_id, checksum, int(time.time())),
+                ).fetchone()
+                if existing:
+                    return existing["id"]
+                # A concurrently expired duplicate must not violate uniqueness.
+                db.execute("DELETE FROM image_drafts WHERE book_id = ? AND sha256 = ?", (book_id, checksum))
+                draft_id = uuid.uuid4().hex
+                media_type, extension, width, height = metadata
+                relative = f"images/{draft_id}.{extension}"
+                destination = self.root / relative
+                fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                created = True
+                with os.fdopen(fd, "wb") as target:
+                    target.write(raw)
+                    target.flush()
+                    os.fsync(target.fileno())
+                directory_fd = os.open(self.images, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+                now = int(time.time())
+                db.execute(
+                    "INSERT INTO image_drafts (id, book_id, file_path, sha256, media_type, byte_size, width, height, created_at, expires_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (draft_id, book_id, relative, checksum, media_type, len(raw), width, height,
+                     now, now + self.settings.image_draft_seconds),
+                )
+            return draft_id
+        except BaseException:
+            if created:
+                destination.unlink(missing_ok=True)
+            raise
 
     def recover_sources(self):
         # A process crash between file creation and commit can leave an orphan.

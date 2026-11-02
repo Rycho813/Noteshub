@@ -1,0 +1,69 @@
+{% extends 'base.html' %}
+{% block title %}图片摘录 · {{ book.title }}{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='images.js').path }}" defer></script>{% endblock %}
+{% block content %}
+<a class="back" href="/books/{{ book.id }}">← {{ book.title }}</a>
+<h1>图片摘录</h1>
+<p>为《{{ book.title }}》准备来源图片。保存图片后，可进入识别与一读编辑；当前只保存草稿，尚不生成正式笔记。</p>
+<section class="panel" id="image-input" data-upload-url="/api/books/{{ book.id }}/image-drafts" data-csrf="{{ csrf }}">
+  <h2>拍照或选择图片</h2>
+  <p class="muted">完整图片先在设备上处理，只上传确认后的范围。支持 PNG/JPEG；HEIC 请先转换。原图最大 20 MiB、2400 万像素。</p>
+  <div class="image-pickers">
+    <label>选择图片／相册<input id="image-file" type="file" accept="image/png,image/jpeg"></label>
+    <label>手机拍照<input id="image-camera" type="file" accept="image/*" capture="environment"></label>
+  </div>
+  <div id="image-drop" class="image-drop" tabindex="0" role="group" aria-label="图片拖放和粘贴区域">
+    将一张图片拖到这里，或点击此处后按 Ctrl+V／⌘V 粘贴截图。
+  </div>
+  <p id="image-message" role="status" aria-live="polite">请选择图片。</p>
+  <p id="image-login-hint" class="muted" hidden>可在另一页<a href="/login" target="_blank" rel="noopener">重新登录</a>，然后回到本页重试保存，无需刷新或重新裁剪。</p>
+  <noscript><p class="notice error">图片裁剪和上传需要启用 JavaScript。</p></noscript>
+  <div id="image-editor" hidden>
+    <h2>选择识别范围</h2>
+    <p class="muted">在图片上拖动框选；拖动框内可移动，拖动四角可调整大小。无需裁剪时点击“使用整张”。放大后可滚动查看。也可用下方数字输入精确调整。</p>
+    <div class="image-tools">
+      <button id="image-rotate" type="button" class="secondary">顺时针旋转 90°</button>
+      <button id="image-whole" type="button" class="secondary">使用整张／重置范围</button>
+      <button id="image-pan" type="button" class="secondary" aria-pressed="false">拖动查看放大图</button>
+      <label>显示缩放 <input id="image-zoom" type="range" min="1" max="3" step="0.25" value="1"></label>
+    </div>
+    <div class="crop-viewport"><canvas id="crop-canvas" aria-label="图片裁剪区域"></canvas></div>
+    <div class="crop-fields">
+      <label>左边距（像素）<input id="crop-x" type="number" min="0" step="1"></label>
+      <label>上边距（像素）<input id="crop-y" type="number" min="0" step="1"></label>
+      <label>宽度（像素）<input id="crop-w" type="number" min="1" step="1"></label>
+      <label>高度（像素）<input id="crop-h" type="number" min="1" step="1"></label>
+    </div>
+    <p id="crop-size" class="muted"></p>
+    <button id="image-preview-button" type="button">确认范围并预览</button>
+  </div>
+  <section id="image-result" class="image-result" hidden>
+    <h2>最终上传预览</h2>
+    <p class="muted">请放大检查小字是否清晰。这张图片将作为以后识别和核对的来源。</p>
+    <a id="image-result-link" target="_blank" rel="noopener"><img id="image-result-preview" alt="最终选定的摘录图片"></a>
+    <p id="image-output-size" class="muted"></p>
+    <div class="image-tools">
+      <button id="image-upload" type="button">保存图片草稿</button>
+      <button id="image-back" type="button" class="secondary">返回调整</button>
+    </div>
+  </section>
+  <button id="image-discard" type="button" class="quiet" hidden>放弃本次选图</button>
+</section>
+<section class="panel">
+  <h2>已保存的图片草稿（{{ drafts|length }}）</h2>
+  <p class="muted">未进入编辑的图片保留 7 天；开始编辑或识别后长期保留，直到你主动删除。草稿和图片均包含在完整备份中。</p>
+  {% for draft in drafts %}
+  <article class="image-draft" id="draft-{{ draft.id }}">
+    <a href="/books/{{ book.id }}/image-drafts/{{ draft.id }}/file" target="_blank" rel="noopener">
+      <img src="/books/{{ book.id }}/image-drafts/{{ draft.id }}/file" loading="lazy" alt="《{{ book.title }}》的来源图片草稿，点击放大">
+    </a>
+    <p class="muted">{{ draft.width }} × {{ draft.height }} 像素 · {{ (draft.byte_size / 1024)|round|int }} KiB · {% if draft.editing_started %}编辑草稿，长期保留{% else %}<time data-expires="{{ draft.expires_at }}">上传起 7 天后到期</time>{% endif %}</p>
+    <p><a class="button-link" href="/books/{{ book.id }}/image-drafts/{{ draft.id }}/edit">识别与一读</a></p>
+    <form action="/books/{{ book.id }}/image-drafts/{{ draft.id }}/cancel" method="post" {% if draft.editing_started %}data-confirm="这张草稿可能包含识别、校对和一读内容。确认永久删除草稿及来源图片？"{% endif %}>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="quiet" type="submit">取消并删除这张草稿</button>
+    </form>
+  </article>
+  {% else %}<p class="muted">暂无图片草稿。</p>{% endfor %}
+</section>
+{% endblock %}

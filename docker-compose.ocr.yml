@@ -1,0 +1,13 @@
+# Optional overlay: never enable OCR or mount credentials in the base workflow.
+services:
+  app:
+    environment:
+      NOTESHUB_OCR_ENABLED: ${NOTESHUB_OCR_ENABLED:-false}
+      NOTESHUB_TENCENT_REGION: ${NOTESHUB_TENCENT_REGION:-ap-guangzhou}
+      NOTESHUB_TENCENT_CREDENTIALS_FILE: /run/secrets/tencent_ocr
+    secrets:
+      - tencent_ocr
+
+secrets:
+  tencent_ocr:
+    file: ${NOTESHUB_TENCENT_CREDENTIALS_PATH:?Set a private credentials file outside the checkout}

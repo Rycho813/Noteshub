@@ -10,11 +10,11 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
-    "Dockerfile", ".dockerignore", "docker-compose.yml", "docker-compose.https.yml",
+    "Dockerfile", ".dockerignore", "docker-compose.yml", "docker-compose.https.yml", "docker-compose.ocr.yml", "docker-compose.ocr-test.yml",
     ".env.example", "requirements.txt", "constraints.txt", "README.md",
     "deploy/Caddyfile", "deploy/noteshub-backup.service", "deploy/noteshub-backup.timer",
-    "docs/deployment.md", "docs/deployment-validation.md", "docs/backup-operations.md",
-    "scripts/backup.sh", "scripts/restore.sh",
+    "docs/deployment.md", "docs/deployment-validation.md", "docs/backup-operations.md", "docs/v2-image-drafts.md", "docs/v2-ocr.md",
+    "scripts/backup.sh", "scripts/restore.sh", "scripts/check_release.py", "scripts/configure_ocr_credentials.py", "scripts/ocr_test.sh", "docs/ocr-test-runbook.md",
 )
 
 

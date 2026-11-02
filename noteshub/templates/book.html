@@ -5,6 +5,7 @@
 <a class="back" href="/">← 书籍列表</a>
 <h1>{{ book.title }}</h1>
 {% if book.author %}<p class="muted">{{ book.author }}</p>{% endif %}
+<p><a class="button-link" href="/books/{{ book.id }}/images">图片摘录 · 上传与草稿</a></p>
 {% if imported %}
   <div class="book-toolbar">
     <p>已完成 <strong id="book-progress">{{ done }}/{{ total }}</strong></p>

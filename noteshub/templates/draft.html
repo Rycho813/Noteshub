@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block title %}识别与一读 · {{ book.title }}{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='draft.js').path }}" defer></script>{% endblock %}
+{% block content %}
+<a class="back" href="/books/{{ book.id }}/images">← 图片草稿</a>
+<h1>识别与一读</h1>
+<p>《{{ book.title }}》 · 本页保存草稿，暂不计入正式笔记和二读进度。</p>
+<section class="panel" id="draft-editor" data-api="/api/books/{{ book.id }}/image-drafts/{{ draft.id }}"
+  data-context="/api/books/{{ book.id }}/image-drafts/context" data-configured="{{ 'true' if ocr_configured else 'false' }}">
+  <p class="muted">进入编辑后，图片和草稿长期保留，不再按 7 天自动清理。请定期完整备份。</p>
+  {% if not ocr_configured %}<p class="notice">尚未启用腾讯 OCR 或配置调用凭证。可先手动填写原文和一读笔记。</p>{% endif %}
+  <div class="image-tools">
+    <button id="draft-recognize" type="button" disabled>识别文字</button>
+    <button id="draft-refresh" type="button" class="secondary">刷新识别状态</button>
+  </div>
+  <p class="muted">点击识别会将选定图片提交腾讯云，可能计费。页面刷新和查看状态不会重新提交识别。</p>
+  <p id="draft-ocr-status" role="status" aria-live="polite">正在读取状态…</p>
+  <div class="review-columns">
+    <div class="reading-text">
+      <h2>来源图片</h2>
+      <a href="/books/{{ book.id }}/image-drafts/{{ draft.id }}/file" target="_blank" rel="noopener">
+        <img class="draft-source" src="/books/{{ book.id }}/image-drafts/{{ draft.id }}/file" alt="{{ book.title }}的原文来源，点击放大核对">
+      </a>
+      <p class="muted">点击图片在新窗口放大，对照校正文字。</p>
+    </div>
+    <div class="review-input">
+      <label for="draft-original">原文 <span class="muted">可校对，最多 50000 字符</span></label>
+      <textarea id="draft-original" rows="9" maxlength="50000" disabled>
+{{ draft.original_text }}</textarea>
+      <label for="draft-comment">一读笔记 <span class="muted">由你填写，可以留空</span></label>
+      <textarea id="draft-comment" rows="7" maxlength="50000" disabled>
+{{ draft.first_comment }}</textarea>
+      <div class="save-row">
+        <p id="draft-save-status" role="status" aria-live="polite">正在准备编辑…</p>
+        <button id="draft-save" type="button" class="secondary" disabled>立即保存</button>
+      </div>
+      <p id="draft-login-hint" class="muted" hidden>输入仍在本页。可在另一页<a href="/login" target="_blank" rel="noopener">重新登录</a>后回来重试保存；不要直接刷新丢失未保存内容。</p>
+      <noscript><p class="notice error">校对、一读编辑和自动保存需要启用 JavaScript。当前仅展示服务器已保存的内容。</p></noscript>
+    </div>
+  </div>
+  <details id="draft-latest" hidden>
+    <summary>最近一次成功识别的结果</summary>
+    <pre id="draft-latest-text" class="raw"></pre>
+    <button id="draft-adopt" type="button" class="secondary">采用这份结果作为原文</button>
+    <p class="muted">重新识别不会覆盖校对原文或一读笔记。需要替换原文时，请明确点击采用。</p>
+  </details>
+  <details id="draft-first" hidden>
+    <summary>首次成功识别的原始结果（保留不变）</summary>
+    <pre id="draft-first-text" class="raw"></pre>
+  </details>
+</section>
+{% endblock %}

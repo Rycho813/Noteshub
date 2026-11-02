@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 from pathlib import Path
 from urllib.parse import quote
 import secrets
@@ -23,7 +24,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from noteshub.auth import load_account, verify
 from noteshub.config import Settings
 from noteshub.db import ImportConflict, Store
+from noteshub.drafts import DraftService, install_routes
 from noteshub.exporter import export_filename, render_book
+from noteshub.images import validate_image
+from noteshub.ocr import TencentOCR
 from noteshub.parser import correct_record, parse_markdown
 
 
@@ -34,10 +38,23 @@ COOKIE = "noteshub_session"
 class BodyLimitMiddleware:
     """Bound actual request bytes, even for chunked/false-length uploads."""
 
-    def __init__(self, app, max_bytes):
+    def __init__(self, app, max_bytes, max_image_bytes):
         self.app, self.max_bytes = app, max_bytes
+        self.max_image_bytes = max_image_bytes
+        self.image_slot = asyncio.Semaphore(1)
 
     async def __call__(self, scope, receive, send):
+        is_image = scope["type"] == "http" and scope["method"] == "POST" and bool(
+            re.fullmatch(r"/api/books/[^/]+/image-drafts", scope["path"]))
+        if is_image:
+            if self.image_slot.locked():
+                response = JSONResponse({"detail": "正在处理另一张图片，请稍后重试。"}, status_code=503)
+                return await response(scope, receive, send)
+            async with self.image_slot:
+                return await self.bounded(scope, receive, send, self.max_image_bytes)
+        return await self.bounded(scope, receive, send, self.max_bytes)
+
+    async def bounded(self, scope, receive, send, limit):
         if scope["type"] != "http" or scope["method"] != "POST":
             return await self.app(scope, receive, send)
         chunks, total = [], 0
@@ -47,7 +64,7 @@ class BodyLimitMiddleware:
                 return
             chunk = message.get("body", b"")
             total += len(chunk)
-            if total > self.max_bytes:
+            if total > limit:
                 response = HTMLResponse("上传或表单过大，请缩小后重试。", status_code=413)
                 return await response(scope, receive, send)
             chunks.append(chunk)
@@ -65,10 +82,11 @@ class BodyLimitMiddleware:
         return await self.app(scope, replay, send)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
     settings = settings or Settings.from_env()
     account = load_account(settings.data_dir)
     store = Store(settings)
+    drafts = DraftService(store, ocr_client if ocr_client is not None else TencentOCR())
     templates = Jinja2Templates(directory=PACKAGE / "templates")
 
     async def cleanup_loop():
@@ -76,8 +94,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await asyncio.sleep(60)
             try:
                 await asyncio.to_thread(store.cleanup)
-            except sqlite3.Error:
-                logging.getLogger(__name__).warning("临时预览清理失败，将在下一轮重试。")
+            except (sqlite3.Error, OSError):
+                logging.getLogger(__name__).warning("临时预览或图片草稿清理失败，将在下一轮重试。")
 
     @asynccontextmanager
     async def lifespan(app):
@@ -88,12 +106,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+            await drafts.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.settings = settings
+    app.state.drafts = drafts
     app.mount("/static", StaticFiles(directory=PACKAGE / "static"), name="static")
-    app.add_middleware(BodyLimitMiddleware, max_bytes=settings.max_upload_bytes + 64 * 1024)
+    app.add_middleware(BodyLimitMiddleware, max_bytes=settings.max_upload_bytes + 64 * 1024,
+                       max_image_bytes=settings.max_image_bytes + 64 * 1024)
 
     @app.middleware("http")
     async def request_context(request, call_next):
@@ -111,7 +132,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
         return response
@@ -317,6 +338,83 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(503, "保存失败，文字仍在输入框中，请重试。")
         return JSONResponse(payload)
 
+    @app.get("/books/{book_id}/images", response_class=HTMLResponse)
+    async def image_workspace(request: Request, book_id: str):
+        require_session(request)
+        await asyncio.to_thread(store.cleanup)
+        with store.connection() as db:
+            book = get_book(db, book_id)
+            drafts = db.execute(
+                "SELECT * FROM image_drafts WHERE book_id = ? ORDER BY created_at DESC, rowid DESC", (book_id,),
+            ).fetchall()
+        return render(request, "images.html", book=book, drafts=drafts)
+
+    @app.post("/api/books/{book_id}/image-drafts")
+    async def upload_image_draft(request: Request, book_id: str):
+        async with read_form(request) as form:
+            file = form.get("file")
+            if not isinstance(file, UploadFile):
+                raise HTTPException(422, "请选择 PNG 或 JPEG 图片。")
+            with store.connection() as db:
+                get_book(db, book_id)
+            raw = await file.read(settings.max_image_bytes + 1)
+        if len(raw) > settings.max_image_bytes:
+            raise HTTPException(413, "图片不能超过 5 MiB，请缩小识别范围后重试。")
+        try:
+            metadata = await asyncio.to_thread(validate_image, raw, settings)
+            draft_id = await asyncio.to_thread(store.save_image_draft, book_id, raw, metadata)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        except LookupError as exc:
+            raise HTTPException(404, str(exc))
+        except (OSError, sqlite3.Error):
+            raise HTTPException(503, "图片保存失败，请重试；重复提交不会生成重复草稿。")
+        return JSONResponse({"id": draft_id, "location": f"/books/{book_id}/images#draft-{draft_id}"}, status_code=201)
+
+    @app.get("/api/books/{book_id}/image-drafts/context")
+    async def image_upload_context(request: Request, book_id: str):
+        session = require_session(request)
+        with store.connection() as db:
+            get_book(db, book_id)
+        return JSONResponse({"csrf": session["csrf"]})
+
+    @app.get("/books/{book_id}/image-drafts/{draft_id}/file")
+    async def image_draft_file(request: Request, book_id: str, draft_id: str):
+        require_session(request)
+        # Read bytes under a read transaction, so cancellation cannot unlink the
+        # file between the row lookup and read. Images are bounded to 5 MiB.
+        def read_image():
+            with store.connection() as db:
+                db.execute("BEGIN")
+                row = db.execute(
+                    "SELECT * FROM image_drafts WHERE id = ? AND book_id = ? AND (editing_started = 1 OR expires_at > ?)",
+                    (draft_id, book_id, int(time.time())),
+                ).fetchone()
+                if row is None:
+                    return None
+                if not re.fullmatch(r"images/[0-9a-f]{32}\.(png|jpg)", row["file_path"]):
+                    raise OSError("Invalid image path")
+                return (store.root / row["file_path"]).read_bytes(), row["media_type"]
+        try:
+            content = await asyncio.to_thread(read_image)
+        except OSError:
+            raise HTTPException(404, "来源图片缺失，请检查备份或重新上传。")
+        if content is None:
+            raise HTTPException(404, "图片草稿不存在、已取消或已过期。")
+        return Response(content[0], media_type=content[1])
+
+    @app.post("/books/{book_id}/image-drafts/{draft_id}/cancel")
+    async def cancel_image_draft(request: Request, book_id: str, draft_id: str):
+        async with read_form(request):
+            with store.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                if db.execute("SELECT 1 FROM ocr_runs r JOIN image_drafts d ON d.id = r.draft_id "
+                              "WHERE d.id = ? AND d.book_id = ? AND r.state = 'running'", (draft_id, book_id)).fetchone():
+                    raise HTTPException(409, "图片正在识别，请等待结束后再删除草稿。")
+                db.execute("DELETE FROM image_drafts WHERE id = ? AND book_id = ?", (draft_id, book_id))
+            await asyncio.to_thread(store.cleanup)
+        return RedirectResponse(f"/books/{book_id}/images", status_code=303)
+
     @app.get("/books/{book_id}/export")
     async def export_book(request: Request, book_id: str):
         require_session(request)
@@ -438,4 +536,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(store.sources / row["original_file_path"], filename=row["filename"],
                             media_type="application/octet-stream")
 
+    install_routes(app, drafts, render=render, require_session=require_session, read_form=read_form, field=field)
     return app

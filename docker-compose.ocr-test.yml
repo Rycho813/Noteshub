@@ -1,0 +1,49 @@
+# Standalone test project. Never merge production Compose files or .env.
+services:
+  app:
+    image: noteshub:${NOTESHUB_TEST_IMAGE_TAG:?Run scripts/ocr_test.sh}
+    restart: "no"
+    init: true
+    user: "10001:10001"
+    environment:
+      NOTESHUB_DATA_DIR: /data
+      NOTESHUB_COOKIE_SECURE: "false"
+      NOTESHUB_OCR_ENABLED: ${NOTESHUB_TEST_OCR_ENABLED:-false}
+      NOTESHUB_TENCENT_REGION: ${NOTESHUB_TEST_REGION:-ap-guangzhou}
+      NOTESHUB_TENCENT_CREDENTIALS_FILE: /run/secrets/tencent_ocr
+    ports:
+      - "127.0.0.1:${NOTESHUB_TEST_PORT:-18080}:8000"
+    volumes:
+      - data:/data
+    secrets:
+      - tencent_ocr
+    read_only: true
+    tmpfs:
+      - /tmp:size=16777216,mode=1777,noexec,nosuid,nodev
+    mem_limit: 512m
+    cpus: 0.50
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    labels:
+      org.noteshub.test: ocr-v2
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  data:
+    name: noteshub-v2-ocr-test_data
+    labels:
+      org.noteshub.test: ocr-v2
+
+networks:
+  default:
+    labels:
+      org.noteshub.test: ocr-v2
+
+secrets:
+  tencent_ocr:
+    file: ${NOTESHUB_TEST_CREDENTIALS_PATH:-/etc/noteshub-v2-ocr-test/tencent-ocr.json}

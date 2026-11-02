@@ -22,7 +22,7 @@ def package(root: Path, output: Path) -> None:
     paths = [root / name for name in FILES]
     paths.extend(path for path in (root / "noteshub").rglob("*")
                  if path.is_file() and "__pycache__" not in path.parts
-                 and path.suffix in {".py", ".html", ".css", ".js"})
+                 and path.suffix in {".py", ".html", ".css", ".js", ".svg", ".webmanifest"})
     entries = {}
     for path in sorted(paths):
         if path.is_symlink() or any((root / parent).is_symlink() for parent in path.relative_to(root).parents if parent != Path('.')):

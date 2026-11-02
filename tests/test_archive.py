@@ -260,7 +260,7 @@ class ArchiveMigrationTests(unittest.TestCase):
             store=Store(Settings(restored))
             Store(Settings(restored))
             with store.connection() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],4)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],5)
                 self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(),[])
                 for table,rows in before.items():
                     after=[dict(row) for row in db.execute('SELECT * FROM '+table)]

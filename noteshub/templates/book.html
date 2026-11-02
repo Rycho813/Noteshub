@@ -5,6 +5,7 @@
 <a class="back" href="/">← 书籍列表</a>
 <h1>{{ book.title }}</h1>
 {% if book.author %}<p class="muted">{{ book.author }}</p>{% endif %}
+<p><a class="button-link" href="/quick?book={{ book.id }}">快速记录想法</a></p>
 <p><a class="button-link" href="/books/{{ book.id }}/images">图片摘录 · 上传与草稿</a></p>
 {% if total %}
   <div class="book-toolbar">
@@ -25,6 +26,7 @@
       <div class="reading-text">
         <h2>原文</h2><div class="text original">{{ current.original_text }}</div>
         <h2>一读评述</h2><div class="text">{{ current.first_comment }}</div>
+        {% if current.source_type == 'paper' %}<p><a href="/quick?note={{ current.id }}">补充原文、一读与图片</a></p>{% endif %}
         {% if current.source_type == 'image' %}<p><a href="/books/{{ book.id }}/image-drafts/{{ current.image_draft_id }}/edit">查看来源图片与识别记录</a></p>{% endif %}
       </div>
       <div class="review-input">

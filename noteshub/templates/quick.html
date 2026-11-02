@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#326451">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>快速记录 · NotesHub</title>
+  <link rel="manifest" href="/static/quick.webmanifest">
+  <link rel="icon" href="/static/quick-icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/quick.css">
+  <script src="/static/quick.js" defer></script>
+</head>
+<body>
+  <header class="site-header"><a class="brand" href="/">NotesHub</a><a href="/login" target="_blank" rel="noopener">登录 / 书籍</a></header>
+  <main id="quick-app">
+    <h1>先记下想法</h1>
+    <p id="quick-status" role="status" aria-live="polite">正在打开本机记录…</p>
+    <p id="quick-error" class="notice error" role="alert" hidden></p>
+    <div class="quick-toolbar">
+      <label class="grow">当前书籍<select id="quick-book" disabled></select></label>
+      <button id="quick-new" class="secondary" disabled>新一条</button>
+    </div>
+    <section class="panel" id="quick-editor">
+      <label for="quick-thought">一读想法 <span class="muted">可直接用 iPhone 键盘的麦克风输入</span></label>
+      <textarea id="quick-thought" rows="5" maxlength="50000" placeholder="先记想法，原文和照片可以稍后补" disabled></textarea>
+      <div class="quick-toolbar">
+        <label class="button-link">连续拍照<input id="quick-camera" type="file" accept="image/*" capture="environment" hidden disabled></label>
+        <label class="button-link secondary">批量选图<input id="quick-files" type="file" accept="image/*" multiple hidden disabled></label>
+      </div>
+      <p id="quick-photo-status" role="status"></p>
+      <ol id="quick-photos" class="quick-photos"></ol>
+      <details><summary>补充原文与二读</summary>
+        <label for="quick-original">原文</label><textarea id="quick-original" rows="8" maxlength="50000" disabled></textarea>
+        <label for="quick-second">二读评论</label><textarea id="quick-second" rows="5" maxlength="50000" disabled></textarea>
+      </details>
+      <div class="quick-toolbar">
+        <button id="quick-sync" disabled>立即同步</button>
+        <button id="quick-copy" class="secondary" hidden>保留本机内容，另存一条</button>
+        <a id="quick-formal" hidden>查看书籍中的笔记</a>
+      </div>
+      <pre id="quick-remote" class="raw" hidden></pre>
+      <section id="quick-ocr-panel" hidden></section>
+    </section>
+    <section class="panel"><h2>最近记录</h2><div id="quick-list"></div></section>
+    <details class="panel"><summary>离线使用与本机备份</summary>
+      <p>首次联网登录并打开本页后，可在 Safari 中“添加到主屏幕”。离线可记录已缓存书籍；联网且打开本页时自动同步，关闭应用后下次打开继续。</p>
+      <p>照片和文字保存在此浏览器中。请使用自己的设备，避免无痕模式；卸载应用或清理网站数据会删除本机副本。看到“已同步”后，服务器才已保存全部文字和图片。</p>
+      <p id="quick-storage" role="status"></p>
+      <button id="quick-backup" class="secondary">导出本机恢复文件</button>
+      <label class="button-link secondary">导入本机恢复文件<input id="quick-restore" type="file" accept=".json,application/json" hidden></label>
+    </details>
+    <noscript>快速记录需要启用 JavaScript；原有书籍、导入和导出仍可从首页访问。</noscript>
+  </main>
+</body>
+</html>

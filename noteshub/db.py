@@ -14,6 +14,7 @@ import sqlite3
 import time
 import uuid
 
+from noteshub.paper_schema import PAPER_SCHEMA
 from noteshub.config import Settings
 from noteshub.parser import confirm_preview, correct_record, parse_markdown
 
@@ -137,6 +138,7 @@ class Store:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.sources.mkdir(exist_ok=True, mode=0o700)
         self.images.mkdir(exist_ok=True, mode=0o700)
+        (self.root / "paper-images").mkdir(exist_ok=True, mode=0o700)
         with self.connection() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version == 0:
@@ -150,7 +152,10 @@ class Store:
                 version = 3
             if version == 3:
                 db.executescript("BEGIN IMMEDIATE;" + ARCHIVE_SCHEMA + "COMMIT;")
-            elif version != 4:
+                version = 4
+            if version == 4:
+                db.executescript("BEGIN IMMEDIATE;" + PAPER_SCHEMA + "COMMIT;")
+            elif version != 5:
                 raise RuntimeError(f"不支持的数据库版本：{version}")
         self.cleanup()
         self.recover_sources()

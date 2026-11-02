@@ -29,6 +29,7 @@ from noteshub.exporter import export_filename, render_book
 from noteshub.images import validate_image
 from noteshub.ocr import TencentOCR
 from noteshub.parser import correct_record, parse_markdown
+from noteshub.paper import PaperService, install_paper, changed
 
 
 PACKAGE = Path(__file__).parent
@@ -45,7 +46,8 @@ class BodyLimitMiddleware:
 
     async def __call__(self, scope, receive, send):
         is_image = scope["type"] == "http" and scope["method"] == "POST" and bool(
-            re.fullmatch(r"/api/books/[^/]+/image-drafts", scope["path"]))
+            (re.fullmatch(r"/api/books/[^/]+/image-drafts", scope["path"]) or
+             re.fullmatch(r"/api/paper/notes/[^/]+/photos/[^/]+", scope["path"])))
         if is_image:
             if self.image_slot.locked():
                 response = JSONResponse({"detail": "正在处理另一张图片，请稍后重试。"}, status_code=503)
@@ -329,6 +331,7 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
                     "UPDATE notes SET second_comment = ?, status = ?, updated_at = ? WHERE id = ? AND book_id = ?",
                     (comment, actual_status, int(time.time()), note_id, book_id),
                 )
+                changed(db, note_id)
                 progress = db.execute(
                     "SELECT COUNT(*) AS total, COALESCE(SUM(status = 'done'), 0) AS done FROM notes WHERE book_id = ?",
                     (book_id,),
@@ -544,4 +547,6 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
                             media_type="application/octet-stream")
 
     install_routes(app, drafts, render=render, require_session=require_session, read_form=read_form, field=field)
+    install_paper(app, PaperService(store), require_session=require_session, render=render,
+                  account_id=hashlib.sha256(json.dumps(account,sort_keys=True).encode()).hexdigest())
     return app

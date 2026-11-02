@@ -24,15 +24,15 @@ def _digest(path: Path) -> str:
 
 def _allowed(name: str) -> bool:
     return name in {"account.json", "noteshub.sqlite3", "manifest.json"} or bool(
-        re.fullmatch(r"sources/[0-9a-f]{32}\.md|images/[0-9a-f]{32}\.(png|jpg)", name)
+        re.fullmatch(r"sources/[0-9a-f]{32}\.md|(?:images|paper-images)/[0-9a-f]{32}\.(png|jpg)", name)
     )
 
 
 def _validate(root: Path, db: sqlite3.Connection) -> list[str]:
     load_account(root)
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (1, 2, 3, 4):
-        raise ValueError("备份工具仅支持数据库 schema v1/v2/v3/v4。")
+    if version not in (1, 2, 3, 4, 5):
+        raise ValueError("备份工具仅支持数据库 schema v1–v5。")
     if db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
         raise ValueError("数据库完整性检查失败。")
     if db.execute("PRAGMA foreign_key_check").fetchall():
@@ -57,6 +57,13 @@ def _validate(root: Path, db: sqlite3.Connection) -> list[str]:
             if (path.is_symlink() or not path.is_file() or path.stat().st_size != byte_size
                     or media_type != expected_type or _digest(path) != checksum):
                 raise ValueError("图片缺失、类型无效或校验失败。")
+            files.append(name)
+    if version >= 5:
+        for name, checksum, byte_size in db.execute('SELECT file_path,sha256,byte_size FROM paper_photos WHERE purged_at IS NULL'):
+            path = root / name
+            if (not re.fullmatch(r'paper-images/[0-9a-f]{32}\.(png|jpg)', name)
+                    or path.is_symlink() or not path.is_file() or path.stat().st_size != byte_size or _digest(path) != checksum):
+                raise ValueError('纸质书图片缺失或校验失败。')
             files.append(name)
     for name in files:
         if (root / name).parent.is_symlink() or (root / name).is_symlink() or not (root / name).is_file():

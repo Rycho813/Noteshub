@@ -46,6 +46,7 @@
       const snapshot = text.value;
       const status = desiredStatus;
       const body = new URLSearchParams({csrf: editor.dataset.csrf, second_comment: snapshot});
+      if (editor.dataset.paperRevision) body.set('revision', editor.dataset.paperRevision);
       if (status !== null) body.set("status", status);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
@@ -66,6 +67,7 @@
           throw new Error("未能确认保存结果，请重试。");
         }
         savedText = snapshot;
+        if (Number.isInteger(result.revision)) editor.dataset.paperRevision = String(result.revision);
         uncertain = false;
         if (desiredStatus === status) desiredStatus = null;
         loginHint.hidden = true;

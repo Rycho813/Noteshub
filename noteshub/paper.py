@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
 import time
 
 from fastapi import HTTPException, Request
@@ -123,10 +124,19 @@ class PaperService:
                     if existing['note_id'] != note_id or existing['sha256'] != checksum or existing['purged_at'] is not None:
                         raise HTTPException(409, '图片编号已被使用，原图未覆盖。')
                     return {'id':photo_id,'sha256':checksum}
-                with path.open('xb') as target:
-                    created = True
-                    os.chmod(path, 0o600)
-                    target.write(raw); target.flush(); os.fsync(target.fileno())
+                if path.exists():
+                    # A crash after file publication and before SQLite commit
+                    # leaves a complete unreferenced file. Exact retry reuses it.
+                    if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest()!=checksum:
+                        raise OSError('Unrecognized image file')
+                else:
+                    fd,temporary=tempfile.mkstemp(prefix='.upload-',dir=path.parent)
+                    try:
+                        with os.fdopen(fd,'wb') as target:
+                            target.write(raw);target.flush();os.fsync(target.fileno())
+                        os.link(temporary,path);created=True
+                    finally:
+                        os.unlink(temporary)
                 directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
                 try:
                     os.fsync(directory)

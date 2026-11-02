@@ -30,6 +30,7 @@ from noteshub.images import validate_image
 from noteshub.ocr import TencentOCR
 from noteshub.parser import correct_record, parse_markdown
 from noteshub.paper import PaperService, install_paper, changed
+from noteshub.local_jobs import LocalJobs, cleanup_photos, install_local_jobs
 
 
 PACKAGE = Path(__file__).parent
@@ -96,6 +97,7 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
             await asyncio.sleep(60)
             try:
                 await asyncio.to_thread(store.cleanup)
+                await asyncio.to_thread(cleanup_photos, store)
             except (sqlite3.Error, OSError):
                 logging.getLogger(__name__).warning("临时预览或图片草稿清理失败，将在下一轮重试。")
 
@@ -291,7 +293,7 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
                     index = next((i for i, item in enumerate(notes) if item["id"] == note), -1)
                     if index == -1:
                         raise HTTPException(404, "这本书中没有这条笔记。")
-                current = db.execute("SELECT * FROM notes WHERE id = ?", (notes[index]["id"],)).fetchone()
+                current = db.execute("SELECT n.*,p.revision AS paper_revision FROM notes n LEFT JOIN paper_entries p ON p.note_id=n.id WHERE n.id = ?", (notes[index]["id"],)).fetchone()
             elif note is not None:
                 raise HTTPException(404, "这本书中没有这条笔记。")
             previews = db.execute(
@@ -316,6 +318,7 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
                 raise HTTPException(422, "缺少二读内容；如需清空，请明确提交空文本。")
             comment = field(form, "second_comment", max_length=50000)
             status = field(form, "status", max_length=20) if "status" in form else None
+            paper_revision = field(form, "revision", max_length=20) if "revision" in form else None
             if status is not None and status not in {"pending", "done"}:
                 raise HTTPException(422, "处理状态只能是待处理或已完成。")
             if "\x00" in comment:
@@ -327,17 +330,24 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
                 if existing is None:
                     raise HTTPException(404, "笔记不存在或不属于这本书。")
                 actual_status = status if status is not None else existing["status"]
+                paper = db.execute('SELECT revision FROM paper_entries WHERE note_id=?',(note_id,)).fetchone()
+                identical = comment == existing['second_comment'] and actual_status == existing['status']
+                if paper and paper_revision != str(paper['revision']) and not identical:
+                    raise HTTPException(409, '纸质书记录已在其他设备更新，输入仍保留，请复制后刷新核对。')
                 db.execute(
                     "UPDATE notes SET second_comment = ?, status = ?, updated_at = ? WHERE id = ? AND book_id = ?",
                     (comment, actual_status, int(time.time()), note_id, book_id),
                 )
-                changed(db, note_id)
+                if not identical:
+                    changed(db, note_id)
                 progress = db.execute(
                     "SELECT COUNT(*) AS total, COALESCE(SUM(status = 'done'), 0) AS done FROM notes WHERE book_id = ?",
                     (book_id,),
                 ).fetchone()
                 payload = {"note_id": note_id, "second_comment": comment, "status": actual_status,
                            "done": progress["done"], "total": progress["total"]}
+                if paper:
+                    payload['revision'] = db.execute('SELECT revision FROM paper_entries WHERE note_id=?',(note_id,)).fetchone()[0]
         except sqlite3.Error:
             raise HTTPException(503, "保存失败，文字仍在输入框中，请重试。")
         return JSONResponse(payload)
@@ -547,6 +557,7 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
                             media_type="application/octet-stream")
 
     install_routes(app, drafts, render=render, require_session=require_session, read_form=read_form, field=field)
-    install_paper(app, PaperService(store), require_session=require_session, render=render,
-                  account_id=hashlib.sha256(json.dumps(account,sort_keys=True).encode()).hexdigest())
+    paper_body, paper_operation = install_paper(app, PaperService(store), require_session=require_session, render=render,
+                                               account_id=hashlib.sha256(json.dumps(account,sort_keys=True).encode()).hexdigest())
+    install_local_jobs(app, LocalJobs(store), require_session=require_session, body=paper_body, operation=paper_operation)
     return app

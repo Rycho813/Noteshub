@@ -84,6 +84,7 @@ case "$command" in
     ;;
   backup)
     image_ready
+    "${local_docker[@]}" volume inspect "$volume" >/dev/null 2>&1 || { echo 'Existing test volume missing; no backup or migration performed.' >&2; exit 1; }
     if [ -n "$("${compose[@]}" ps --status running -q app)" ]; then
       echo 'Stop the test app first. No backup or migration was performed.' >&2; exit 1
     fi
@@ -101,7 +102,7 @@ if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or met
  raise SystemExit('Backup directory must be private, owned by the current user, and outside the release.')
 PY
     umask 077
-    partial=$(mktemp "$backup_dir/before-step4-XXXXXXXX.tar.gz.partial")
+    partial=$(mktemp "$backup_dir/before-upgrade-XXXXXXXX.tar.gz.partial")
     trap 'rm -f -- "$partial"' EXIT
     "${compose[@]}" run --rm --no-deps -T app python -m noteshub.maintenance backup > "$partial"
     python3 - "$partial" <<'PY'
@@ -151,7 +152,12 @@ with sqlite3.connect("/data/noteshub.sqlite3") as db:
  print("Draft lengths/retention:",db.execute("SELECT length(original_text),length(first_comment),editing_started FROM image_drafts").fetchall())
  if db.execute("PRAGMA user_version").fetchone()[0] >= 4:
   print("archived_image_notes",db.execute("SELECT COUNT(*) FROM notes WHERE source_type = ?",("image",)).fetchone()[0])
-  print("pending_image_drafts",db.execute("SELECT COUNT(*) FROM image_drafts d WHERE NOT EXISTS (SELECT 1 FROM notes n WHERE n.image_draft_id = d.id)").fetchone()[0])'
+  print("pending_image_drafts",db.execute("SELECT COUNT(*) FROM image_drafts d WHERE NOT EXISTS (SELECT 1 FROM notes n WHERE n.image_draft_id = d.id)").fetchone()[0])
+ if db.execute("PRAGMA user_version").fetchone()[0] >= 5:
+  print("paper_notes",db.execute("SELECT COUNT(*) FROM paper_entries").fetchone()[0])
+  print("paper_photos_live",db.execute("SELECT COUNT(*) FROM paper_photos WHERE purged_at IS NULL").fetchone()[0])
+ if db.execute("PRAGMA user_version").fetchone()[0] >= 6:
+  print("local_ocr_states",db.execute("SELECT state,COUNT(*) FROM paper_ocr_jobs GROUP BY state").fetchall())'
     ;;
   stop) "${compose[@]}" stop app ;;
   down) "${compose[@]}" down; echo "Test volume retained: $volume. No credentials or data removed." ;;

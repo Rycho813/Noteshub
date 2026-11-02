@@ -14,7 +14,7 @@ import sqlite3
 import time
 import uuid
 
-from noteshub.paper_schema import PAPER_SCHEMA
+from noteshub.paper_schema import PAPER_SCHEMA, LOCAL_OCR_SCHEMA
 from noteshub.config import Settings
 from noteshub.parser import confirm_preview, correct_record, parse_markdown
 
@@ -155,7 +155,10 @@ class Store:
                 version = 4
             if version == 4:
                 db.executescript("BEGIN IMMEDIATE;" + PAPER_SCHEMA + "COMMIT;")
-            elif version != 5:
+                version = 5
+            if version == 5:
+                db.executescript("BEGIN IMMEDIATE;" + LOCAL_OCR_SCHEMA + "COMMIT;")
+            elif version != 6:
                 raise RuntimeError(f"不支持的数据库版本：{version}")
         self.cleanup()
         self.recover_sources()

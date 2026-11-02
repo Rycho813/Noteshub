@@ -118,6 +118,40 @@ def run():
                     # Cache contains only public shell assets, never private API data.
                     cached=page.evaluate('async () => { const keys=await caches.keys();const out=[];for(const k of keys) for(const r of await (await caches.open(k)).keys())out.push(new URL(r.url).pathname);return out; }')
                     assert all(v=='/quick' or v.startswith('/static/') for v in cached),cached
+                    # Same-device tabs cannot silently overwrite each other's local edits.
+                    ctx.set_offline(True)
+                    tab=ctx.new_page();tab.goto(base+'/quick');ready(tab)
+                    page.locator('#quick-thought').fill('第一个标签页的新内容')
+                    page.wait_for_timeout(200)
+                    tab.locator('#quick-thought').fill('另一个标签页不能被覆盖的内容')
+                    tab.wait_for_function("() => document.getElementById('quick-error').textContent.includes('另一标签页')")
+                    assert tab.locator('#quick-thought').input_value()=='另一个标签页不能被覆盖的内容'
+                    tab.locator('#quick-copy').click()
+                    tab.wait_for_function("() => document.getElementById('quick-error').textContent.includes('已另存')")
+                    assert tab.evaluate('() => NotesHubQuick.getCurrent().id')!=copied
+                    # Quota failure must retain the text and not claim durability.
+                    tab.evaluate("() => { const original=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(value,...rest) { if(this.name==='notes') { IDBObjectStore.prototype.put=original;throw new DOMException('fixture quota','QuotaExceededError'); }return original.call(this,value,...rest); }; }")
+                    tab.locator('#quick-thought').fill('磁盘不足时输入也不能消失')
+                    tab.wait_for_function("() => document.getElementById('quick-status').textContent.startsWith('本机保存失败')")
+                    assert tab.locator('#quick-thought').input_value()=='磁盘不足时输入也不能消失'
+                    tab.locator('#quick-sync').click()
+                    tab.wait_for_function("() => document.getElementById('quick-status').textContent==='仅本地保存'")
+                    # A photo that cannot yet fit in IDB stays in page memory,
+                    # is included in recovery export, and can be retried.
+                    tab.evaluate("() => { const original=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(value,...rest) { if(this.name==='photos') { IDBObjectStore.prototype.put=original;throw new DOMException('fixture photo quota','QuotaExceededError'); }return original.call(this,value,...rest); }; }")
+                    tab.locator('#quick-camera').set_input_files(images[0])
+                    tab.wait_for_function("() => document.getElementById('quick-status').textContent.startsWith('本机保存失败')")
+                    assert tab.locator('#quick-photos li').count()==2
+                    tab.get_by_text('离线使用与本机备份',exact=True).click()
+                    with tab.expect_download() as photo_recovery:tab.locator('#quick-backup').click()
+                    import json
+                    recovery=json.loads(Path(photo_recovery.value.path()).read_text())
+                    assert len(recovery['unsaved']['photos'])==2
+                    assert all(any(p['id']==photo_id for p in recovery['photos']) for photo_id in recovery['unsaved']['photos'])
+                    tab.locator('#quick-sync').click()
+                    tab.wait_for_function("() => document.getElementById('quick-status').textContent==='仅本地保存'")
+                    tab.close(run_before_unload=False)
+                    ctx.set_offline(False)
                     # Restore in a fresh local profile as new records, preserving originals.
                     restored=browser.new_context();rp=restored.new_page();login(rp);rp.goto(base+'/quick');ready(rp)
                     rp.locator('#quick-restore').set_input_files(local_backup)
@@ -127,7 +161,7 @@ def run():
                     artifacts=ROOT/'test-results';artifacts.mkdir(exist_ok=True)
                     page.screenshot(path=artifacts/'v3-quick-mobile.png',full_page=True)
                     browser.close()
-                print('PASS P0: real SW offline reload, durable text/multi-photo ordering, exact retry after lost response, two-device CAS conflict and preserved copy, removal, reauthentication, local export/restore and mobile layout. Zero OCR calls.')
+                print('PASS P0: real SW offline reload, durable text/multi-photo ordering, exact retry after lost response, two-device and two-tab conflicts with preserved copies, quota failure, removal, reauthentication, local export/restore and mobile layout. Zero OCR calls.')
             finally:
                 server.terminate();server.wait(timeout=15)
                 if server.returncode not in (0,-15):

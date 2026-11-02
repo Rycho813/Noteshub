@@ -398,7 +398,7 @@ class MigrationTests(unittest.TestCase):
             restore(new_root,io.BytesIO(archive.getvalue()))
             migrated=Store(Settings(new_root))
             with migrated.connection() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],5)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],6)
                 row=db.execute('SELECT * FROM image_drafts').fetchone()
                 self.assertEqual(row['file_path'],filename)
                 self.assertEqual(row['editing_started'],0)

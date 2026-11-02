@@ -17,7 +17,8 @@
   <section id="review-editor" class="panel"
     data-save-url="/api/books/{{ book.id }}/notes/{{ current.id }}"
     data-export-url="/books/{{ book.id }}/export" data-export-name="{{ export_name }}"
-    data-status="{{ current.status }}" data-csrf="{{ csrf }}" data-next-url="{{ next_url or '' }}">
+    data-status="{{ current.status }}" data-csrf="{{ csrf }}" data-next-url="{{ next_url or '' }}"
+    {% if current.paper_revision is not none %}data-paper-revision="{{ current.paper_revision }}"{% endif %}>
     <div class="note-heading">
       <p class="eyebrow">笔记 {{ index + 1 }} / {{ total }}{% if current.manually_corrected %} · 原文已手动修正{% endif %}</p>
       <span id="note-status" class="status-badge">{{ '已完成' if current.status == 'done' else '待处理' }}</span>

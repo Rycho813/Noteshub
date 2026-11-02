@@ -163,7 +163,7 @@ class ReviewTests(WebCase):
     def test_existing_data_and_saved_review_survive_restart(self):
         self.save(0, "重启保留", "done")
         with self.store.connection() as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 5)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 6)
         restarted = create_app(self.settings)
         with TestClient(restarted, follow_redirects=False) as client:
             client.cookies.update(self.client.cookies)

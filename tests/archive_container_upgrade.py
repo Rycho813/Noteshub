@@ -1,4 +1,4 @@
-"""Actual old-v3-volume -> backup -> v4 upgrade/archive/restore, zero OCR calls.
+"""Actual old-v3-volume -> backup -> v6 archive/paper/restore, no paid OCR.
 
 Usage: .venv/bin/python tests/archive_container_upgrade.py OLD_RELEASE NEW_RELEASE
 Requires both verified test images and an unused local test project/port/volume.
@@ -20,6 +20,7 @@ import httpx
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from tests.test_archive import legacy_v3
+from tests.test_images import picture
 from tests.test_web import PASSWORD
 
 DOCKER=['docker','--host=unix:///var/run/docker.sock']
@@ -34,8 +35,12 @@ with sqlite3.connect(root/'noteshub.sqlite3') as db:
  for table in ('books','imports','image_drafts','ocr_runs'):
   tables[table]=db.execute('SELECT * FROM '+table+' ORDER BY id').fetchall()
  tables['notes']=db.execute('SELECT id,book_id,import_id,source_type,original_text,first_comment,second_comment,status,raw_source,sort_order,start_line,end_line,manually_corrected,created_at,updated_at FROM notes ORDER BY id').fetchall()
+ if db.execute('PRAGMA user_version').fetchone()[0]>=6:
+  for table in ('paper_entries','paper_photos','paper_pages','paper_mutations','paper_ocr_jobs'):
+   rows=db.execute('SELECT * FROM '+table+' ORDER BY rowid').fetchall()
+   if rows: tables[table]=rows
  digest=hashlib.sha256(json.dumps(tables,ensure_ascii=False).encode()).hexdigest()
- files={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file() and (p.name=='account.json' or p.parent.name in ('sources','images'))}
+ files={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file() and (p.name=='account.json' or p.parent.name in ('sources','images','paper-images'))}
  print(json.dumps({'tables_digest':digest,'files':files}))'''
 
 
@@ -111,8 +116,8 @@ def run(old_root,new_root):
                 assert version(old_image,clone)==3
                 assert snapshot(old_image,clone)==before
                 helper('up'); ready()
-                assert version(new_image)==4
-                assert snapshot(new_image)==before,'v3 to v4 changed saved data'
+                assert version(new_image)==6
+                assert snapshot(new_image)==before,'v3 to v6 changed saved data'
                 check=helper('check').stdout.decode()
                 assert 'OCR enabled/configured: False' in check
                 current=c.get(api).json()
@@ -125,22 +130,48 @@ def run(old_root,new_root):
                 assert final['archived'] and final['note_status']=='pending'
                 assert final['original_text']==old_state['original_text'] and final['first_comment']==old_state['first_comment']
                 assert c.post(api+'/archive',data={'csrf':csrf,'revision':str(current['revision'])}).json()['note_id']==final['note_id']
+                # New multi-photo paths are owned by UID 10001 inside the actual
+                # container, while all old draft/history rows remain unchanged.
+                paper_id=secrets.token_hex(16);paper_api='/api/paper/notes/'+paper_id
+                headers={'X-CSRF-Token':csrf}
+                payload={'mutation_id':secrets.token_hex(16),'revision':0,'book_id':'book',
+                         'first_comment':'容器升级保留一读','original_text':'','second_comment':'','photo_ids':[]}
+                assert c.post(paper_api+'/sync',json=payload,headers=headers).status_code==200
+                photo_ids=[secrets.token_hex(16),secrets.token_hex(16)]
+                for photo_id in photo_ids:
+                    assert c.post(paper_api+'/photos/'+photo_id,content=picture(),headers=headers).status_code==200
+                payload.update(mutation_id=secrets.token_hex(16),revision=1,photo_ids=photo_ids)
+                assert c.post(paper_api+'/sync',json=payload,headers=headers).status_code==200
+                job=c.post(paper_api+'/ocr',json={'job_id':secrets.token_hex(16),'revision':2},headers=headers).json()
+                worker_token=c.post('/api/paper/worker-tokens',json={'label':'container fixture'},headers=headers).json()['token']
+                worker_headers={'Authorization':'Bearer '+worker_token}
+                claim=c.post('/api/local-ocr/claim',json={'claim_id':secrets.token_hex(16)},headers=worker_headers).json()
+                assert claim['job']['id']==job['id']
+                results={'lease':claim['lease'],'engine':'synthetic container result',
+                         'results':[{'photo_id':p,'text':'合成识别结果'} for p in photo_ids]}
+                assert c.post('/api/local-ocr/jobs/'+job['id']+'/result',json=results,headers=worker_headers).status_code==200
+                payload.update(mutation_id=secrets.token_hex(16),revision=2,original_text='容器校对原文')
+                assert c.post(paper_api+'/sync',json=payload,headers=headers).status_code==200
                 exported=c.get('/books/book/export').content
                 assert ('原'*137).encode() in exported and ('评'*17).encode() in exported
+                assert '容器校对原文'.encode() in exported and '容器升级保留一读'.encode() in exported
                 summary=helper('summary').stdout.decode()
-                assert 'notes 2' in summary and 'ocr_runs 1' in summary and 'archived_image_notes 1' in summary
+                assert 'notes 3' in summary and 'ocr_runs 1' in summary and 'archived_image_notes 1' in summary
+                assert 'paper_photos_live 2' in summary
                 print(summary.strip())
                 helper('stop')
                 after=snapshot(new_image)
                 archived_backup=get_backup()
                 clone=restore_clone(archived_backup,new_image)
-                assert version(new_image,clone)==4
+                assert version(new_image,clone)==6
                 assert snapshot(new_image,clone)==after
                 helper('up'); ready()
                 assert c.get('/books/book/export').content==exported
                 assert c.get(api).json()['archived']
                 assert c.get('/books/book/image-drafts/draft/file').status_code==200
-                print('PASS: actual old v3 container/volume, pre-upgrade verified backup without migration, v3 clone restore, v4 migration with account/image/history/137+17 text unchanged, idempotent archive, export, v4 backup/restore and restart. Zero new OCR jobs or real calls.')
+                assert c.get(paper_api+'/photos/'+photo_ids[0]).content==picture()
+                assert c.get(paper_api+'/ocr').json()['jobs'][0]['state']=='succeeded'
+                print('PASS: actual old v3 container/volume, pre-upgrade verified backup without migration, v3 clone restore, v6 migration with account/image/history/137+17 text unchanged, idempotent V2 archive, multi-photo paper note, local-job protocol with synthetic result, export, v6 backup/restore and restart. Zero paid OCR calls.')
         except subprocess.CalledProcessError as error:
             print(error.stderr.decode(errors='replace')[-2000:]); raise
         finally:

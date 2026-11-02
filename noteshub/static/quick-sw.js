@@ -1,6 +1,6 @@
 /* Cache only the public, empty recorder shell. No API, photo or account data. */
 const CACHE = 'noteshub-quick-v1';
-const SHELL = ['/quick','/static/app.css','/static/quick.css','/static/quick.js',
+const SHELL = ['/quick','/static/app.css','/static/quick.css','/static/quick.js','/static/quick-ocr.js',
   '/static/quick.webmanifest','/static/quick-icon.svg'];
 self.addEventListener('install',event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));

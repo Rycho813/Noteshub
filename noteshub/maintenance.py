@@ -31,8 +31,8 @@ def _allowed(name: str) -> bool:
 def _validate(root: Path, db: sqlite3.Connection) -> list[str]:
     load_account(root)
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (1, 2, 3, 4, 5):
-        raise ValueError("备份工具仅支持数据库 schema v1–v5。")
+    if version not in (1, 2, 3, 4, 5, 6):
+        raise ValueError("备份工具仅支持数据库 schema v1–v6。")
     if db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
         raise ValueError("数据库完整性检查失败。")
     if db.execute("PRAGMA foreign_key_check").fetchall():
@@ -138,6 +138,13 @@ def restore(root: Path, source, *, max_bytes: int = 2 * 1024**3) -> None:
                     db.execute("UPDATE ocr_runs SET state = 'failed', error_code = 'Interrupted', finished_at = ? "
                                "WHERE state = 'running'", (int(time.time()),))
                 db.execute("UPDATE login_guard SET failures = 0, blocked_until = 0 WHERE id = 1")
+                if db.execute('PRAGMA user_version').fetchone()[0] >= 6:
+                    db.execute('UPDATE paper_worker_tokens SET revoked_at=? WHERE revoked_at IS NULL',(int(time.time()),))
+                    db.execute("UPDATE paper_ocr_jobs SET state='pending',worker_id=NULL,lease_hash=NULL,lease_until=NULL WHERE state='running'")
+                    # A restored archive may be older than its deletion deadline.
+                    # Recovery must not immediately purge the images just restored.
+                    db.execute('UPDATE paper_entries SET confirmed_revision=NULL,confirmed_at=NULL')
+                    db.execute('UPDATE paper_photos SET purge_after=NULL WHERE purged_at IS NULL')
             (stage / "manifest.json").unlink()
             for path in stage.iterdir():
                 target = root / path.name

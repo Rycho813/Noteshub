@@ -4,9 +4,10 @@
   const $ = id => document.getElementById(id);
   const uuid = () => crypto.randomUUID().replaceAll('-','');
   const clone = value => structuredClone(value);
-  let db, context, current, ready = false, saving = Promise.resolve(), syncing = false, adding = false;
+  let db, context, current, ready = false, saving = Promise.resolve(), syncing = false, adding = false, pendingSaves = 0;
   let lastError = '', localFailed = false, syncFailed = false, urls = [], retryTimer;
   const fields = {first_comment:$('quick-thought'),original_text:$('quick-original'),second_comment:$('quick-second')};
+  const pendingPhotos = new Map();
   const request = item => new Promise((resolve,reject) => { item.onsuccess = () => resolve(item.result); item.onerror = () => reject(item.error); });
   function transaction(stores,mode,callback) {
     return new Promise((resolve,reject) => {
@@ -23,6 +24,7 @@
   function error(message = '') { lastError = message; $('quick-error').hidden = !message; $('quick-error').textContent = message; }
   function status(message) { $('quick-status').textContent = message; }
   function displayStatus() {
+    $('quick-sync').textContent = localFailed ? '重试本机保存并同步' : '立即同步';
     if (localFailed) return status('本机保存失败 · 请导出恢复文件并保留本页');
     if (current?.conflict) return status('同步失败 · 本机内容保留，云端有更新');
     if (syncing) return status('同步中');
@@ -59,7 +61,7 @@
     $('quick-photos').replaceChildren();
     const note = current;
     for (const [index,id] of note.photos.entries()) {
-      const photo = await get('photos',key(id));
+      const photo = pendingPhotos.get(key(id)) || await get('photos',key(id));
       if (current !== note) return;
       const li = document.createElement('li'), img = document.createElement('img');
       img.alt = '图片 ' + (index+1);
@@ -121,14 +123,17 @@
     fields.first_comment.focus();
   }
   function persist(photo) {
+    pendingSaves++;
     for (const [name,input] of Object.entries(fields)) current[name] = input.value;
     const expected = current.localVersion;
     current.localVersion++; current.dirty = true; current.updated_at = Date.now();
     const value = clone(current);
+    if (photo) pendingPhotos.set(photo.key,{...photo,note_id:value.id});
+    const volatile = [...pendingPhotos.values()].filter(p => p.note_id===value.id);
     status('正在本地保存…');
     saving = saving.catch(() => {}).then(() => transaction(['notes','photos','recoveries','meta'],'readwrite',async tx => {
       const store = tx.objectStore('notes'); const old = await request(store.get(key(value.id)));
-      if (photo) tx.objectStore('photos').put(photo);
+      for (const pending of volatile) tx.objectStore('photos').put(pending);
       if ((old?.localVersion || 0) !== expected) {
         tx.objectStore('recoveries').put({key:context.workspace+':'+uuid(),note:value});
         return false;
@@ -141,10 +146,15 @@
         localFailed = true;
         error('另一标签页已修改这条记录。本次输入已保存为本机恢复副本；请点“另存一条”，或导出本机恢复文件。');
         $('quick-copy').hidden = false;
-      } else { localFailed = false; }
+      } else { localFailed = false; volatile.forEach(p => pendingPhotos.delete(p.key)); }
       displayStatus(); await list();
       if (success) scheduleSync();
-    }).catch(e => { localFailed = true; error('本机保存失败：'+e.message+'。请保留本页并导出本机恢复文件。'); displayStatus(); throw e; });
+    }).catch(e => {
+      localFailed = true;
+      if (current.id===value.id && current.localVersion===value.localVersion) current.localVersion=expected;
+      error('本机保存失败：'+e.message+'。请保留本页，腾出空间后重试；也可导出含本页照片的恢复文件。');
+      displayStatus();throw e;
+    }).finally(() => { pendingSaves--; });
     return saving;
   }
   function scheduleSync() { clearTimeout(retryTimer); retryTimer = setTimeout(() => safe(sync),700); }
@@ -252,7 +262,9 @@
       if (bitmap.width*bitmap.height > 24000000) throw new Error('来源图片超过 2400 万像素');
       const scale = Math.min(1,2400/Math.max(bitmap.width,bitmap.height));
       const canvas = document.createElement('canvas'); canvas.width = Math.max(1,Math.round(bitmap.width*scale)); canvas.height = Math.max(1,Math.round(bitmap.height*scale));
-      canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);
+      const drawing=canvas.getContext('2d');
+      drawing.fillStyle='#fff';drawing.fillRect(0,0,canvas.width,canvas.height);
+      drawing.drawImage(bitmap,0,0,canvas.width,canvas.height);
       const blob = await new Promise(resolve => canvas.toBlob(resolve,'image/jpeg',.9));
       if (!blob || blob.size > 5*1024*1024) throw new Error('图片处理失败或仍超过 5 MiB，请缩小后选择');
       return blob;
@@ -268,7 +280,8 @@
         $('quick-photo-status').textContent = '正在本机保存图片 '+(index+1)+' / '+files.length;
         const blob = await prepare(file), id = uuid();
         current.photos.push(id);
-        await persist({key:key(id),id,workspace:context.workspace,blob,uploaded:false});
+        try { await persist({key:key(id),id,workspace:context.workspace,blob,uploaded:false}); }
+        catch(e) { await paintPhotos();throw e; }
         await paintPhotos();
       }
       $('quick-photo-status').textContent = '图片已保存在本机';
@@ -282,7 +295,7 @@
     Object.keys(fields).forEach(name => { copied[name] = fields[name].value; });
     const photos = [];
     for (const id of old.photos) {
-      const photo = await get('photos',key(id));
+      const photo = pendingPhotos.get(key(id)) || await get('photos',key(id));
       if (!photo?.blob) throw new Error('另存需要本机图片副本，请联网加载图片后重试');
       const newId = uuid(); copied.photos.push(newId); photos.push({...photo,id:newId,key:key(newId),uploaded:false});
     }
@@ -296,7 +309,7 @@
   }
   async function downloadBackup() {
     await saving.catch(() => {});
-    const photos = await all('photos'), encoded = [];
+    const photos = [...new Map([...(await all('photos')).map(p => [p.key,p]),...pendingPhotos.entries()]).values()], encoded = [];
     for (const photo of photos) {
       const bytes = new Uint8Array(await photo.blob.arrayBuffer()); let binary = '';
       for (let i=0;i<bytes.length;i+=8192) binary += String.fromCharCode(...bytes.subarray(i,i+8192));
@@ -312,9 +325,12 @@
     if (data.format !== 'noteshub-local-v1' || !Array.isArray(data.notes) || !Array.isArray(data.photos)) throw new Error('恢复文件格式无效');
     const photos = new Map(data.photos.map(p => [p.key,p]));
     // Import as fresh notes: never overwrite this device's or the server's IDs.
-    const sources = new Map(data.notes.map(n => [n.workspace+':'+n.id,n]));
-    if (data.unsaved) sources.set(data.unsaved.workspace+':'+data.unsaved.id,data.unsaved);
-    for (const [index,r] of (data.recoveries || []).entries()) sources.set('recovery:'+index,r.note);
+    const sources = new Map();
+    for (const note of [...data.notes,...(data.recoveries || []).map(r => r.note),...(data.unsaved ? [data.unsaved] : [])]) {
+      if (!note.first_comment && !note.original_text && !note.second_comment && !note.photos?.length) continue;
+      const identity=JSON.stringify([note.workspace,note.id,note.first_comment,note.original_text,note.second_comment,note.photos]);
+      sources.set(identity,note);
+    }
     for (const source of sources.values()) {
       if (source.workspace !== context.workspace || !context.books.some(b => b.id===source.book_id)) throw new Error('恢复文件属于其他账号或书籍，请打开原资料库后恢复');
       const note = fresh(source.book_id), additions = [];
@@ -341,8 +357,6 @@
     try { await refreshContext(); } catch(e) { if (!context) throw new Error('首次使用请先联网登录，再打开快速记录。'); error('当前离线或登录失效，仍可保存本机记录。'); }
     for (const book of context.books) { const option = document.createElement('option'); option.value=book.id; option.textContent=book.title; $('quick-book').append(option); }
     if (!context.books.length) throw new Error('请先联网登录，在书籍页面创建一本书，再打开快速记录');
-    ready = true;
-    for (const input of [...Object.values(fields),$('quick-camera'),$('quick-files'),$('quick-book'),$('quick-new'),$('quick-sync')]) input.disabled=false;
     if (navigator.onLine) { await pull().catch(() => {}); }
     const params = new URLSearchParams(location.search), noteId=params.get('note') || (!params.has('book') && (await get('meta','lastNote:'+context.workspace))?.value);
     if (params.has('note') && !await get('notes',key(noteId))) {
@@ -357,7 +371,7 @@
     for (const input of Object.values(fields)) input.addEventListener('input',() => safe(() => persist()));
     $('quick-book').addEventListener('change',() => safe(() => newNote($('quick-book').value)));
     $('quick-new').addEventListener('click',() => safe(() => newNote()));
-    $('quick-sync').addEventListener('click',() => safe(sync));
+    $('quick-sync').addEventListener('click',() => safe(async () => { if (localFailed) await persist();await sync(); }));
     $('quick-copy').addEventListener('click',() => safe(copyNote));
     for (const id of ['quick-camera','quick-files']) $(id).addEventListener('change',() => safe(() => addFiles($(id))));
     $('quick-backup').addEventListener('click',() => safe(downloadBackup));
@@ -365,8 +379,10 @@
     window.addEventListener('online',() => safe(sync));
     document.addEventListener('visibilitychange',() => { if (document.visibilityState === 'visible') safe(sync); });
     setInterval(() => { if (document.visibilityState === 'visible') safe(sync); },30000);
-    window.addEventListener('beforeunload',event => { if (localFailed) { event.preventDefault(); event.returnValue=''; } });
+    window.addEventListener('beforeunload',event => { if (localFailed || adding || pendingSaves) { event.preventDefault(); event.returnValue=''; } });
     await list();
+    ready = true;
+    for (const input of [...Object.values(fields),$('quick-camera'),$('quick-files'),$('quick-book'),$('quick-new'),$('quick-sync')]) input.disabled=false;
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/quick-sw.js',{scope:'/quick'}).catch(() => error('离线页面尚未准备完成，请联网重新打开本页后再离线使用'));
     const persisted = await navigator.storage?.persist?.().catch(() => false);
     $('quick-storage').textContent = persisted ? '浏览器已授予持久存储。' : '浏览器未承诺永久保留本机存储，请及时同步或导出本机恢复文件。';

@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/static/app.css">
   <link rel="stylesheet" href="/static/quick.css">
   <script src="/static/quick.js" defer></script>
+  <script src="/static/quick-ocr.js" defer></script>
 </head>
 <body>
   <header class="site-header"><a class="brand" href="/">NotesHub</a><a href="/login" target="_blank" rel="noopener">登录 / 书籍</a></header>
@@ -44,6 +45,16 @@
       <section id="quick-ocr-panel" hidden></section>
     </section>
     <section class="panel"><h2>最近记录</h2><div id="quick-list"></div></section>
+    <details class="panel" id="quick-desktop"><summary>电脑本地 OCR</summary>
+      <p>电脑按需运行本地识别程序；关闭电脑不影响手机记录。先把已同步图片加入队列，再在电脑运行程序。</p>
+      <button id="quick-batch" class="secondary">为未识别图片批量排队</button>
+      <p id="quick-batch-status" role="status"></p>
+      <h3>电脑访问凭证</h3>
+      <p>专用凭证仅可领取本地 OCR 任务、读取任务图片和回传结果。保存在自己的电脑中，可随时撤销。</p>
+      <button id="quick-token-new" class="secondary">生成电脑专用凭证</button>
+      <label id="quick-token-label" hidden>新凭证（只显示本次，请复制到电脑配置）<input id="quick-token-value" type="password" readonly autocomplete="off"></label>
+      <div id="quick-tokens"></div>
+    </details>
     <details class="panel"><summary>离线使用与本机备份</summary>
       <p>首次联网登录并打开本页后，可在 Safari 中“添加到主屏幕”。离线可记录已缓存书籍；联网且打开本页时自动同步，关闭应用后下次打开继续。</p>
       <p>照片和文字保存在此浏览器中。请使用自己的设备，避免无痕模式；卸载应用或清理网站数据会删除本机副本。看到“已同步”后，服务器才已保存全部文字和图片。</p>

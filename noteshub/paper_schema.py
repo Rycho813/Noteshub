@@ -44,3 +44,27 @@ CREATE TABLE paper_mutations (
 );
 PRAGMA user_version = 5;
 """
+
+LOCAL_OCR_SCHEMA = """
+CREATE TABLE paper_worker_tokens (
+ id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL,
+ created_at INTEGER NOT NULL, last_used_at INTEGER, revoked_at INTEGER
+);
+CREATE TABLE paper_ocr_jobs (
+ id TEXT PRIMARY KEY, note_id TEXT NOT NULL REFERENCES paper_entries(note_id),
+ revision INTEGER NOT NULL, photos_json TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('pending','running','succeeded','failed')),
+ created_at INTEGER NOT NULL, finished_at INTEGER,
+ worker_id TEXT REFERENCES paper_worker_tokens(id), lease_hash TEXT, lease_until INTEGER,
+ engine TEXT NOT NULL DEFAULT '', results_json TEXT NOT NULL DEFAULT '[]', error TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX paper_ocr_active ON paper_ocr_jobs(note_id) WHERE state IN ('pending','running');
+CREATE TABLE paper_worker_claims (
+ id TEXT PRIMARY KEY, worker_id TEXT NOT NULL REFERENCES paper_worker_tokens(id),
+ job_id TEXT REFERENCES paper_ocr_jobs(id), lease_hash TEXT, created_at INTEGER NOT NULL
+);
+CREATE INDEX paper_photos_note ON paper_photos(note_id);
+CREATE INDEX paper_ocr_queue ON paper_ocr_jobs(state,created_at);
+CREATE INDEX paper_ocr_history ON paper_ocr_jobs(note_id,created_at);
+PRAGMA user_version = 6;
+"""

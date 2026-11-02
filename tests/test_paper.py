@@ -87,6 +87,14 @@ class PaperTests(WebCase):
         self.assertEqual(self.client.get('/api/paper/notes/'+uid()+'/photos/'+a).status_code,404)
         self.assertEqual(self.client.post(self.base+'/photos/'+uid(),content=b'bad',headers=self.headers).status_code,422)
 
+    def test_retry_recovers_file_published_before_database_commit(self):
+        self.send(self.payload())
+        photo=uid();path=self.store.root/'paper-images'/f'{photo}.png'
+        path.write_bytes(picture())  # Simulated process death after atomic file publication.
+        self.assertEqual(self.client.post(self.base+'/photos/'+photo,content=picture(),headers=self.headers).status_code,200)
+        self.assertEqual(self.db_count('paper_photos'),1)
+        self.assertEqual(path.read_bytes(),picture())
+
     def test_metadata_failure_rolls_back_and_retry_preserves_content(self):
         self.send(self.payload())
         with self.store.connection() as db:
@@ -110,7 +118,7 @@ class PaperTests(WebCase):
         self.assertIn('原文'.encode(),export)
         self.assertIn('先记录我的想法'.encode(),export)
         self.assertIn('补充的纸质书原文'.encode(),export)
-        response=self.client.post('/api/books/'+self.book+'/notes/'+self.note,data={'csrf':self.token(),'second_comment':'旧阅读界面二读'})
+        response=self.client.post('/api/books/'+self.book+'/notes/'+self.note,data={'csrf':self.token(),'revision':'2','second_comment':'旧阅读界面二读'})
         self.assertEqual(response.status_code,200)
         self.assertEqual(self.client.get(self.base).json()['revision'],3)
         out=io.BytesIO();backup(self.store.root,out)
@@ -147,7 +155,7 @@ class PaperTests(WebCase):
             files={name:(root/name).read_bytes() for name in (image,md,'account.json')}
             store=Store(Settings(root));Store(Settings(root))
             with store.connection() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],5)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],6)
                 self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(),[])
                 for table,rows in before.items(): self.assertEqual(rows,[tuple(r) for r in db.execute('SELECT * FROM '+table)])
             self.assertEqual(files,{name:(root/name).read_bytes() for name in files})

@@ -8,8 +8,8 @@ readonly marker=ocr-v2
 readonly volume=noteshub-v2-ocr-test_data
 command=${1:-help}
 case "$command" in
-  help) echo 'Usage: bash scripts/ocr_test.sh {preflight|build|backup|account|up|check|network|enable-ocr|disable-ocr|summary|stop|down}'; exit 0 ;;
-  preflight|build|backup|account|up|check|network|enable-ocr|disable-ocr|summary|stop|down) ;;
+  help) echo 'Usage: bash scripts/ocr_test.sh {preflight|build|backup|account|up|check|network|enable-ocr|disable-ocr|summary|retire-preview|retire-apply|stop|down}'; exit 0 ;;
+  preflight|build|backup|account|up|check|network|enable-ocr|disable-ocr|summary|retire-preview|retire-apply|stop|down) ;;
   *) echo 'Unknown command; no changes made.' >&2; exit 2 ;;
 esac
 release_sha=$(python3 scripts/check_release.py --digest)
@@ -120,6 +120,16 @@ PY
     ln -- "$partial" "$archive"
     sha256sum -- "$archive" > "$archive.sha256"
     echo "BACKUP=$archive"
+    ;;
+  retire-preview|retire-apply)
+    image_ready
+    "${local_docker[@]}" volume inspect "$volume" >/dev/null 2>&1 || { echo 'Existing test volume missing; no changes made.' >&2; exit 1; }
+    if [ -n "$("${compose[@]}" ps --status running -q app)" ]; then
+      echo 'Stop the test app and verify a full backup before retiring old drafts.' >&2; exit 1
+    fi
+    retire_args=()
+    if [ "$command" = retire-apply ]; then retire_args+=(--apply); fi
+    "${compose[@]}" run --rm --no-deps -T app python -m noteshub.retire_drafts "${retire_args[@]}"
     ;;
   up|enable-ocr|disable-ocr)
     credentials_metadata; image_ready

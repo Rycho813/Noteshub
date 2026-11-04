@@ -25,3 +25,13 @@ html.quick-viewer-open { overflow: hidden; }
 #quick-list button { display: block; width: 100%; text-align: left; margin-bottom: .6rem; overflow-wrap: anywhere; }
 #quick-error, #quick-remote { white-space: pre-wrap; overflow-wrap: anywhere; }
 #quick-status { font-weight: 600; }
+#quick-image-edit { overflow: auto; padding: 1rem; }
+#quick-image-edit[hidden], #quick-viewer-stage[hidden] { display: none; }
+#quick-edit-canvas { display: block; max-width: 100%; max-height: 60vh; object-fit: contain; touch-action: none; margin: auto; }
+.quick-crop-fields { display: flex; flex-wrap: wrap; gap: .5rem; }
+.quick-crop-fields label { width: 7rem; }
+.quick-ocr-view .site-header, .quick-ocr-view h1, .quick-ocr-view #quick-book-search,
+.quick-ocr-view label:has(#quick-book-search), .quick-ocr-view #quick-app > .quick-toolbar,
+.quick-ocr-view #quick-create-book, .quick-ocr-view #quick-app > section:not(#quick-editor),
+.quick-ocr-view #quick-app > details, .quick-ocr-view #quick-new { display: none; }
+.quick-ocr-view #quick-app { padding: .5rem; }

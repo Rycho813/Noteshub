@@ -94,3 +94,9 @@ footer { max-width: 1080px; margin: auto; padding: 20px 24px; border-top: 1px so
   .image-tools button { flex: 1 1 140px; }
   .image-pickers { grid-template-columns: minmax(0, 1fr); }
 }
+.review-pages, .page-jump { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; }
+.page-jump label { display: flex; align-items: center; gap: .5rem; }
+.page-jump input { width: 6rem; }
+.review-editor h2 { font-size: 1rem; margin-top: 1rem; }
+.review-editor details { margin-top: 1rem; }
+.record-ocr-frame { display: block; width: 100%; min-height: 650px; border: 1px solid var(--border); }

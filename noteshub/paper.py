@@ -80,7 +80,7 @@ class PaperService:
                     raise HTTPException(409, '同一个同步编号不能用于不同内容。')
                 return json.loads(receipt['response'])
             row = db.execute('SELECT n.book_id,p.revision FROM notes n LEFT JOIN paper_entries p ON p.note_id=n.id WHERE n.id=?', (note_id,)).fetchone()
-            if row and (row['book_id'] != book_id or row['revision'] is None):
+            if row and row['revision'] is None:
                 raise HTTPException(409, '这条记录属于其他书籍或录入方式。')
             if row and row['revision'] != revision:
                 raise HTTPException(409, '云端内容已在其他设备更新。本机内容仍保留，请核对或另存一条。')
@@ -93,6 +93,9 @@ class PaperService:
                     raise HTTPException(422, '还有图片未上传，记录仍保留在本机。')
             now = int(time.time())
             if row:
+                if row['book_id'] != book_id:
+                    order = db.execute('SELECT COALESCE(MAX(sort_order)+1,0) FROM notes WHERE book_id=?', (book_id,)).fetchone()[0]
+                    db.execute('UPDATE notes SET book_id=?,sort_order=? WHERE id=?', (book_id,order,note_id))
                 db.execute('UPDATE notes SET original_text=?,first_comment=?,second_comment=?,updated_at=?,manually_corrected=1 WHERE id=?', (*fields,now,note_id))
                 changed(db, note_id)
             else:
@@ -192,6 +195,26 @@ def install_paper(app, service, *, require_session, render, account_id):
             workspace = db.execute('SELECT id FROM paper_workspace').fetchone()[0]
             books = [dict(row) for row in db.execute('SELECT id,title,author FROM books ORDER BY created_at DESC,rowid DESC')]
         return {'workspace':hashlib.sha256((workspace+account_id).encode()).hexdigest(), 'csrf':session['csrf'], 'books':books}
+
+    @app.post('/api/paper/books/{book_id}')
+    async def create_book(request: Request, book_id: str):
+        payload = await body(request)
+        identifier(book_id)
+        title, author = payload.get('title'), payload.get('author', '')
+        if (not isinstance(title, str) or not title.strip() or len(title) > 200
+                or not isinstance(author, str) or len(author) > 200 or '\x00' in title + author):
+            raise HTTPException(422, '书名必填，书名与作者最多各 200 字符。')
+        title, author = title.strip(), author.strip()
+        def save():
+            with store.connection() as db:
+                db.execute('BEGIN IMMEDIATE')
+                old = db.execute('SELECT id,title,author FROM books WHERE id=?', (book_id,)).fetchone()
+                if old and (old['title'],old['author']) != (title,author):
+                    raise HTTPException(409, '书籍编号已存在，请保留本机内容后重试。')
+                if not old:
+                    db.execute('INSERT INTO books VALUES (?,?,?,?)', (book_id,title,author,int(time.time())))
+                return {'id':book_id,'title':title,'author':author}
+        return await operation(save)
 
     @app.get('/api/paper/notes')
     async def listing(request: Request):

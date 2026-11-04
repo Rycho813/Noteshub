@@ -74,7 +74,7 @@ def run():
                 page.get_by_role('textbox',name='书名 必填',exact=True).fill('V2 browser book')
                 page.get_by_role('button',name='创建书籍').click()
                 book_url=page.url
-                page.get_by_role('link',name='图片摘录 · 上传与草稿').click()
+                page.goto(book_url+'/images')
                 workspace=page.url
                 page.locator('#image-file').set_input_files(png)
                 page.locator('#image-editor').wait_for(state='visible')
@@ -208,12 +208,13 @@ def run():
                 assert uploaded.status == 303
                 assert page.request.post(base+uploaded.headers['location']+'/confirm',form={'csrf':csrf},max_redirects=0).status == 303
                 page.goto(book_url)
-                page.wait_for_function("() => !document.getElementById('second-comment').disabled")
+                page.locator('.second-reading summary').first.click()
+                page.wait_for_function("() => !document.querySelector('.second-comment').disabled")
                 page.evaluate("() => navigator.clipboard.writeText('浏览器粘贴的二读评论')")
-                page.locator('#second-comment').focus()
+                page.locator('.second-comment').first.focus()
                 page.keyboard.press('Control+v')
                 page.get_by_text('已保存',exact=True).wait_for()
-                assert page.locator('#second-comment').input_value() == '浏览器粘贴的二读评论'
+                assert page.locator('.second-comment').first.input_value() == '浏览器粘贴的二读评论'
                 assert '浏览器粘贴的二读评论' in page.request.get(book_url+'/export').text()
                 assert not errors,errors
                 browser.close()

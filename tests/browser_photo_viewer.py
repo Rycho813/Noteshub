@@ -144,11 +144,12 @@ def markdown_roundtrip(page, base):
     page.get_by_role('button', name='上传并预览', exact=True).click()
     page.get_by_role('button', name='确认导入 2 条笔记', exact=True).click()
     page.wait_for_url(book_url)
-    page.wait_for_function("() => !document.getElementById('second-comment').disabled")
-    page.locator('#second-comment').fill('保留的二读\n新一行')
-    expect(page.locator('#save-status')).to_have_text('已保存')
+    page.locator('.second-reading summary').first.click()
+    page.wait_for_function("() => !document.querySelector('.second-comment').disabled")
+    page.locator('.second-comment').first.fill('保留的二读\n新一行')
+    expect(page.locator('.save-status').first).to_have_text('已保存')
     page.reload()
-    expect(page.locator('#second-comment')).to_have_value('保留的二读\n新一行')
+    expect(page.locator('.second-comment').first).to_have_value('保留的二读\n新一行')
     with page.expect_download() as download:
         page.locator('#export-book').click()
     exported = Path(download.value.path()).read_text()
@@ -163,7 +164,11 @@ def cached_reader(create_context, base, note_id, artifacts, label):
     login(page,base)
     page.goto(base+'/quick?note='+note_id)
     ready(page)
-    page.wait_for_function("() => document.querySelectorAll('.quick-photo-open:not(:disabled)').length === 2")
+    try:
+        page.wait_for_function("() => document.querySelectorAll('.quick-photo-open:not(:disabled)').length === 2")
+    except Exception:
+        print('Downloaded viewer state:',page.evaluate("() => ({error:document.getElementById('quick-error').textContent,status:document.getElementById('quick-status').textContent,note:NotesHubQuick.getCurrent()})"),flush=True)
+        raise
     context.set_offline(True)
     exercise_viewer(page,True,artifacts,label+'-downloaded-offline')
     context.close()

@@ -5,6 +5,7 @@
   if (!q) return;
   const uuid=() => crypto.randomUUID().replaceAll('-','');
   let rendering=0;
+  const expandedJobs=new Set();
   function button(label,fn) {
     const b=document.createElement('button'); b.type='button';b.className='secondary';b.textContent=label;
     b.addEventListener('click',() => q.safe(async () => { b.disabled=true;try { await fn(); } finally { b.disabled=false; } }));return b;
@@ -17,7 +18,7 @@
   }
   async function render() {
     const generation=++rendering,note=q.getCurrent(), panel=$('quick-ocr-panel');
-    if (!note) return;
+    if (!note || !$('quick-ocr-section').open) return;
     panel.hidden=false;panel.replaceChildren();
     const title=document.createElement('h2');title.textContent='本地识别与校对';panel.append(title);
     const hint=document.createElement('p');hint.className='muted';hint.textContent='原文可稍后识别。任务在自己的电脑运行，识别结果先保留为候选，不覆盖一读。';panel.append(hint);
@@ -32,6 +33,8 @@
     if (generation!==rendering || q.getCurrent()?.id!==note.id) return;
     for (const job of data.jobs) {
       const details=document.createElement('details'),summary=document.createElement('summary');
+      details.dataset.jobId=job.id;details.open=expandedJobs.has(job.id);
+      details.addEventListener('toggle',() => {if(details.open)expandedJobs.add(job.id);else expandedJobs.delete(job.id);});
       const names={pending:'等待电脑领取',running:'电脑正在识别',succeeded:'识别结果',failed:'识别失败'};
       summary.textContent=names[job.state]+' · '+new Date(job.created_at*1000).toLocaleString();details.append(summary);
       if (job.error) { const p=document.createElement('p');p.textContent=job.error;details.append(p); }
@@ -40,11 +43,12 @@
         const pre=document.createElement('pre');pre.className='raw';pre.textContent=candidate;details.append(pre);
         const compatible=JSON.stringify(job.photos.map(p => p.id))===JSON.stringify(note.photos);
         if (compatible) details.append(button('采用为原文，再人工校对',async () => {
-          if (q.getCurrent()?.id!==note.id) throw new Error('记录已切换，请重新核对');
+          if (q.getCurrent()?.id!==note.id || JSON.stringify(q.getCurrent().photos)!==JSON.stringify(job.photos.map(p => p.id))) throw new Error('记录或图片已改变，请重新核对候选');
           if (q.getCurrent().original_text && !confirm('用这份本地识别结果替换当前原文？一读和二读评论会保留。')) return;
           if (candidate.length>50000) throw new Error('候选超过 50000 字符，请分条处理');
           await q.save({original_text:candidate});
           document.getElementById('quick-original').closest('details').open=true;
+          document.getElementById('quick-original').focus();
         }));
         else { const p=document.createElement('p');p.textContent='这是旧图片或旧顺序的历史结果，仍保留供核对。';details.append(p); }
       }
@@ -90,6 +94,7 @@
     const result=await (await q.api('/api/paper/ocr-batch',{})).json();
     $('quick-batch-status').textContent='已排队 '+result.queued+' 条；已有结果或暂不符合条件 '+result.skipped+' 条。请在电脑运行本地识别程序。';await render();
   }));
+  $('quick-ocr-section').addEventListener('toggle',() => {if($('quick-ocr-section').open)q.safe(render);});
   let timer;
   for (const name of ['quick-note-open','quick-sync-complete']) document.addEventListener(name,() => {
     clearTimeout(timer);timer=setTimeout(() => q.safe(render),150);

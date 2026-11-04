@@ -65,19 +65,30 @@ class ReviewTests(WebCase):
             self.assertEqual(last.json()["status"], "done")
         self.assertEqual(self.stored(0)["second_comment"], "手机后提交")
 
-    def test_one_note_at_a_time_and_ordered_navigation(self):
+    def test_paginated_list_and_note_deep_link(self):
         first = self.client.get(self.book).text
-        self.assertIn("原文一", first)
-        self.assertNotIn("原文二", first)
-        self.assertIn(f"?note={self.notes[1]['id']}", first)
-        middle = self.client.get(self.book, params={"note": self.notes[1]["id"]}).text
-        self.assertIn("原文二", middle)
-        self.assertNotIn("原文一", middle)
-        self.assertIn(f"?note={self.notes[0]['id']}", middle)
-        self.assertIn(f"?note={self.notes[2]['id']}", middle)
-        last = self.client.get(self.book, params={"note": self.notes[2]["id"]}).text
-        self.assertIn('data-next-url=""', last)
-        self.assertEqual(self.client.get(self.book, params={"note": "missing"}).status_code, 404)
+        for value in ('原文一', '原文二', '原文三'):
+            self.assertIn(value, first)
+        self.assertEqual(first.count('class="panel review-editor"'), 3)
+        self.assertNotIn('<details class="second-reading" open', first)
+        self.assertNotIn('图片摘录 · 上传与草稿', first)
+        for number in range(3, 62):
+            with self.store.connection() as db:
+                row = dict(self.notes[0])
+                row.update(id=f'synthetic-{number}',sort_order=number,original_text=f'分页原文{number}')
+                db.execute('INSERT INTO notes ('+','.join(row)+') VALUES ('+','.join('?' for _ in row)+')',tuple(row.values()))
+        first = self.client.get(self.book).text
+        second = self.client.get(self.book, params={'page':2}).text
+        last = self.client.get(self.book, params={'note':'synthetic-61'}).text
+        self.assertEqual(first.count('class="panel review-editor"'),30)
+        self.assertEqual(second.count('class="panel review-editor"'),30)
+        self.assertEqual(last.count('class="panel review-editor"'),2)
+        self.assertIn('第 3 / 3 页',last)
+        self.assertNotIn('分页原文61',first)
+        self.assertIn('分页原文61',self.client.get(self.book+'/export').text)
+        self.assertEqual(self.client.get(self.book,params={'page':4}).status_code,404)
+        self.assertEqual(self.client.get(self.book,params={'page':0}).status_code,422)
+        self.assertEqual(self.client.get(self.book,params={'note':'missing'}).status_code,404)
 
     def test_assets_do_not_use_internal_http_origin_behind_tls_proxy(self):
         page = self.client.get(self.book, headers={"host": "notes.example.com", "x-forwarded-proto": "https"})

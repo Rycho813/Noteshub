@@ -90,7 +90,7 @@ def run():
                     page.locator('#draft-note-link').click()
                     page.wait_for_url(base+note_url)
                     page.wait_for_function("() => !document.getElementById('export-book').disabled")
-                    assert '浏览器即时校对后的原文' in page.locator('.reading-text').inner_text()
+                    assert '浏览器即时校对后的原文' in page.locator('#review-list').inner_text()
                     assert page.get_by_role('link',name='查看来源图片与识别记录').is_visible()
                     with page.expect_download() as download:
                         page.locator('#export-book').click()
@@ -105,7 +105,7 @@ def run():
                     page.get_by_role('textbox',name='书名 必填',exact=True).fill('只有图片的新书')
                     page.get_by_role('button',name='创建书籍').click()
                     new_book=page.url
-                    page.get_by_role('link',name='图片摘录 · 上传与草稿').click()
+                    page.goto(new_book+'/images')
                     page.locator('#image-file').set_input_files(image)
                     page.locator('#image-editor').wait_for(state='visible')
                     page.locator('#image-preview-button').click()
@@ -120,7 +120,7 @@ def run():
                     archived(page)
                     page.locator('#draft-note-link').click()
                     page.wait_for_function("() => !document.getElementById('export-book').disabled")
-                    assert '无需 OCR 的手动原文' in page.locator('.reading-text').inner_text()
+                    assert '无需 OCR 的手动原文' in page.locator('#review-list').inner_text()
                     assert page.get_by_role('heading',name='导入 Zotero 笔记').is_visible()
                     # Failed draft save blocks archive until retry succeeds.
                     csrf=page.locator('input[name="csrf"]').first.get_attribute('value')

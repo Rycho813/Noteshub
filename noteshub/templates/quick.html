@@ -19,10 +19,18 @@
     <h1>先记下想法</h1>
     <p id="quick-status" role="status" aria-live="polite">正在打开本机记录…</p>
     <p id="quick-error" class="notice error" role="alert" hidden></p>
+    <label>搜索书名或作者<input id="quick-book-search" type="search" maxlength="200" placeholder="输入关键词筛选，不改变当前归属"></label>
     <div class="quick-toolbar">
       <label class="grow">当前书籍<select id="quick-book" disabled></select></label>
       <button id="quick-new" class="secondary" disabled>新一条</button>
     </div>
+    <details id="quick-create-book"><summary>新建书籍 · 离线也可用</summary>
+      <form id="quick-book-form" class="stack">
+        <label>书名（必填）<input id="quick-book-title" required maxlength="200"></label>
+        <label>作者（选填）<input id="quick-book-author" maxlength="200"></label>
+        <button id="quick-book-create" type="submit" disabled>创建并选中</button>
+      </form>
+    </details>
     <section class="panel" id="quick-editor">
       <label for="quick-thought">一读想法 <span class="muted">可直接用 iPhone 键盘的麦克风输入</span></label>
       <textarea id="quick-thought" rows="5" maxlength="50000" placeholder="先记想法，原文和照片可以稍后补" disabled></textarea>
@@ -31,7 +39,7 @@
         <label class="button-link secondary">批量选图<input id="quick-files" type="file" accept="image/*" multiple hidden disabled></label>
       </div>
       <p id="quick-photo-status" role="status"></p>
-      <p class="muted">点击图片查看大图；可放大、缩小，关闭后继续编辑。本机已有图片离线也可查看。</p>
+      <p class="muted">点击图片查看大图、裁剪或旋转；电脑可直接粘贴截图。本机已有图片离线也可查看。</p>
       <ol id="quick-photos" class="quick-photos"></ol>
       <details><summary>补充原文与二读</summary>
         <label for="quick-original">原文</label><textarea id="quick-original" rows="8" maxlength="50000" disabled></textarea>
@@ -43,7 +51,7 @@
         <a id="quick-formal" hidden>查看书籍中的笔记</a>
       </div>
       <pre id="quick-remote" class="raw" hidden></pre>
-      <section id="quick-ocr-panel" hidden></section>
+      <details id="quick-ocr-section"><summary>识别与校对</summary><section id="quick-ocr-panel" hidden></section></details>
     </section>
     <section class="panel"><h2>最近记录</h2><div id="quick-list"></div></section>
     <details class="panel" id="quick-desktop"><summary>电脑本地 OCR</summary>
@@ -57,7 +65,7 @@
       <div id="quick-tokens"></div>
     </details>
     <details class="panel"><summary>离线使用与本机备份</summary>
-      <p>首次联网登录并打开本页后，可在 Safari 中“添加到主屏幕”。离线可记录已缓存书籍；联网且打开本页时自动同步，关闭应用后下次打开继续。</p>
+      <p>首次联网登录并打开本页后，可在 Safari 中“添加到主屏幕”。离线可新建书籍或记录已缓存书籍；联网且打开本页时自动同步，关闭应用后下次打开继续。</p>
       <p>照片和文字保存在此浏览器中。请使用自己的设备，避免无痕模式；卸载应用或清理网站数据会删除本机副本。看到“已同步”后，服务器才已保存全部文字和图片。</p>
       <p id="quick-storage" role="status"></p>
       <button id="quick-backup" class="secondary">导出本机恢复文件</button>
@@ -72,8 +80,28 @@
       <button id="quick-viewer-out" type="button">缩小</button>
       <button id="quick-viewer-in" type="button">放大</button>
       <button id="quick-viewer-fit" type="button">适应屏幕</button>
+      <button id="quick-viewer-prev" type="button">上一张</button>
+      <button id="quick-viewer-next" type="button">下一张</button>
+      <button id="quick-viewer-edit" type="button">裁剪 / 旋转</button>
       <small id="quick-viewer-help">放大后滑动或滚动查看；电脑可按 Esc 关闭。</small>
     </div>
+    <section id="quick-image-edit" hidden>
+      <div class="quick-toolbar">
+        <button id="quick-edit-rotate" type="button">旋转 90°</button>
+        <button id="quick-edit-reset" type="button">使用整图</button>
+        <button id="quick-edit-apply" type="button">应用编辑</button>
+        <button id="quick-edit-cancel" type="button">取消编辑</button>
+      </div>
+      <p>在图片上拖动框选裁剪范围；应用后自动保存并同步处理后的图片。</p>
+      <p id="quick-edit-size" role="status"></p>
+      <div class="quick-crop-fields">
+        <label>左边<input id="quick-crop-x" type="number" min="0"></label>
+        <label>上边<input id="quick-crop-y" type="number" min="0"></label>
+        <label>宽度<input id="quick-crop-w" type="number" min="1"></label>
+        <label>高度<input id="quick-crop-h" type="number" min="1"></label>
+      </div>
+      <canvas id="quick-edit-canvas" aria-label="拖动框选裁剪范围"></canvas>
+    </section>
     <div id="quick-viewer-stage" tabindex="0" aria-label="大图，可滚动查看">
       <div class="quick-viewer-canvas"><img id="quick-viewer-image" alt="" draggable="false"></div>
     </div>

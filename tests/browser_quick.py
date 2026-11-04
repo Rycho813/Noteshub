@@ -139,7 +139,7 @@ def run():
                     tab.wait_for_function("() => document.getElementById('quick-status').textContent.startsWith('本机保存失败')")
                     assert tab.locator('#quick-thought').input_value()=='磁盘不足时输入也不能消失'
                     tab.locator('#quick-sync').click()
-                    tab.wait_for_function("() => document.getElementById('quick-status').textContent==='仅本地保存'")
+                    tab.wait_for_function("() => document.getElementById('quick-status').textContent.includes('仅本地保存')")
                     # A photo that cannot yet fit in IDB stays in page memory,
                     # is included in recovery export, and can be retried.
                     tab.evaluate("() => { const original=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(value,...rest) { if(this.name==='photos') { IDBObjectStore.prototype.put=original;throw new DOMException('fixture photo quota','QuotaExceededError'); }return original.call(this,value,...rest); }; }")
@@ -161,7 +161,7 @@ def run():
                     assert len(recovery['unsaved']['photos'])==2
                     assert all(any(p['id']==photo_id for p in recovery['photos']) for photo_id in recovery['unsaved']['photos'])
                     tab.locator('#quick-sync').click()
-                    tab.wait_for_function("() => document.getElementById('quick-status').textContent==='仅本地保存'")
+                    tab.wait_for_function("() => document.getElementById('quick-status').textContent.includes('仅本地保存')")
                     tab.close(run_before_unload=False)
                     ctx.set_offline(False)
                     # Restore in a fresh local profile as new records, preserving originals.

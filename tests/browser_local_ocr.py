@@ -56,6 +56,7 @@ def run(ocr_python):
                     page.locator('#quick-sync').click()
                     page.wait_for_function("() => document.getElementById('quick-status').textContent==='已同步'")
                     note_id=page.evaluate('() => NotesHubQuick.getCurrent().id')
+                    page.locator('#quick-ocr-section summary').click()
                     page.get_by_role('button',name='交给电脑识别',exact=True).click()
                     page.get_by_text('等待电脑领取',exact=False).wait_for()
                     # Generate a scoped token using the actual UI; never print it.
@@ -92,10 +93,13 @@ def run(ocr_python):
                     page.get_by_role('button',name='取消图片清理',exact=True).click()
                     page.get_by_role('button',name='已校对并同步，30 天后清理图片',exact=True).wait_for()
                     assert page.request.get(base+'/api/paper/notes/'+note_id).json()['confirmed_revision'] is None
-                    # Old reader second-comment flow now fences paper revisions too.
-                    page.locator('#quick-formal').click();page.wait_for_function("() => !document.getElementById('second-comment').disabled")
-                    page.locator('#second-comment').fill('统一阅读页继续二读')
-                    page.wait_for_function("() => document.getElementById('save-status').textContent==='已保存'")
+                    # Reader saves the same paper note with revision protection.
+                    page.locator('#quick-formal').click()
+                    row=page.locator('[data-note-id="'+note_id+'"]')
+                    row.locator('.second-reading summary').click()
+                    row.locator('.second-comment').fill('统一阅读页继续二读')
+                    from playwright.sync_api import expect
+                    expect(row.locator('.save-status')).to_have_text('已保存')
                     assert '统一阅读页继续二读' in page.request.get(base+'/books/book/export').text()
                     assert '电脑识别不能覆盖的一读' in page.request.get(base+'/books/book/export').text()
                     assert not errors,errors

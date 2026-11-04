@@ -135,9 +135,10 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        frame_ancestors = "'self'" if request.url.path == "/quick" and request.query_params.get("view") == "ocr" else "'none'"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; "
-            "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            f"frame-ancestors {frame_ancestors}; base-uri 'none'; form-action 'self'"
         )
         return response
 
@@ -278,7 +279,7 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
         return RedirectResponse(f"/books/{book_id}", status_code=303)
 
     @app.get("/books/{book_id}", response_class=HTMLResponse)
-    async def book_page(request: Request, book_id: str, note: str | None = None):
+    async def book_page(request: Request, book_id: str, note: str | None = None, page: int = 1):
         session = require_session(request)
         store.cleanup()
         with store.connection() as db:
@@ -286,28 +287,25 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
             imported = db.execute("SELECT * FROM imports WHERE book_id = ?", (book_id,)).fetchone()
             markdown_count = db.execute("SELECT COUNT(*) FROM notes WHERE book_id = ? AND source_type = 'zotero'", (book_id,)).fetchone()[0]
             notes = db.execute("SELECT id, status FROM notes WHERE book_id = ? ORDER BY sort_order", (book_id,)).fetchall()
-            current = None
-            index = 0
-            if notes:
-                if note is not None:
-                    index = next((i for i, item in enumerate(notes) if item["id"] == note), -1)
-                    if index == -1:
-                        raise HTTPException(404, "这本书中没有这条笔记。")
-                current = db.execute("SELECT n.*,p.revision AS paper_revision FROM notes n LEFT JOIN paper_entries p ON p.note_id=n.id WHERE n.id = ?", (notes[index]["id"],)).fetchone()
-            elif note is not None:
-                raise HTTPException(404, "这本书中没有这条笔记。")
+            if page < 1:
+                raise HTTPException(422, "页码必须大于零。")
+            if note is not None:
+                index = next((i for i, item in enumerate(notes) if item["id"] == note), -1)
+                if index < 0:
+                    raise HTTPException(404, "这本书中没有这条笔记。")
+                page = index // 30 + 1
+            pages = max(1, (len(notes) + 29) // 30)
+            if page > pages:
+                raise HTTPException(404, "页码不存在。")
+            entries = db.execute("SELECT n.*,p.revision AS paper_revision FROM notes n LEFT JOIN paper_entries p ON p.note_id=n.id WHERE n.book_id=? ORDER BY sort_order LIMIT 30 OFFSET ?", (book_id,(page-1)*30)).fetchall()
             previews = db.execute(
                 "SELECT id, filename FROM previews WHERE book_id = ? AND session_id = ? ORDER BY rowid DESC",
                 (book_id, session["id"]),
             ).fetchall()
-        def note_url(position):
-            return f"/books/{book_id}?note={notes[position]['id']}"
         return render(
             request, "book.html", book=book, imported=imported, notes=notes, previews=previews,
-            current=current, index=index, total=len(notes), markdown_count=markdown_count,
+            entries=entries, page=page, pages=pages, focus_note=note, total=len(notes), markdown_count=markdown_count,
             done=sum(item["status"] == "done" for item in notes),
-            previous_url=note_url(index - 1) if index > 0 else None,
-            next_url=note_url(index + 1) if index + 1 < len(notes) else None,
             export_name=export_filename(book["title"]),
         )
 

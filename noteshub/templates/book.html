@@ -1,66 +1,77 @@
 {% extends 'base.html' %}
 {% block title %}{{ book.title }} · Noteshub{% endblock %}
-{% block scripts %}{% if current %}<script src="{{ url_for('static', path='review.js').path }}" defer></script>{% endif %}{% endblock %}
+{% block scripts %}{% if entries %}<script src="{{ url_for('static', path='review.js').path }}" defer></script>{% endif %}{% endblock %}
 {% block content %}
 <a class="back" href="/">← 书籍列表</a>
 <h1>{{ book.title }}</h1>
 {% if book.author %}<p class="muted">{{ book.author }}</p>{% endif %}
 <p><a class="button-link" href="/quick?book={{ book.id }}">快速记录想法</a></p>
-<p><a class="button-link" href="/books/{{ book.id }}/images">图片摘录 · 上传与草稿</a></p>
 {% if total %}
-  <div class="book-toolbar">
-    <p>已完成 <strong id="book-progress">{{ done }}/{{ total }}</strong></p>
-    {% if current %}<button id="export-book" type="button" class="secondary" disabled>导出整书 Markdown</button>{% endif %}
-  </div>
-  <p class="muted" id="export-warning">{% if total > done %}仍有 {{ total - done }} 条待处理；导出会包含全部 {{ total }} 条笔记。{% else %}全部笔记已完成，导出包含整本书。{% endif %}</p>
-  {% if current %}
-  <section id="review-editor" class="panel"
-    data-save-url="/api/books/{{ book.id }}/notes/{{ current.id }}"
-    data-export-url="/books/{{ book.id }}/export" data-export-name="{{ export_name }}"
-    data-status="{{ current.status }}" data-csrf="{{ csrf }}" data-next-url="{{ next_url or '' }}"
-    {% if current.paper_revision is not none %}data-paper-revision="{{ current.paper_revision }}"{% endif %}>
-    <div class="note-heading">
-      <p class="eyebrow">笔记 {{ index + 1 }} / {{ total }}{% if current.manually_corrected %} · 原文已手动修正{% endif %}</p>
-      <span id="note-status" class="status-badge">{{ '已完成' if current.status == 'done' else '待处理' }}</span>
+  <div id="review-list" data-focus-note="{{ focus_note or '' }}" data-export-url="/books/{{ book.id }}/export" data-export-name="{{ export_name }}">
+    <div class="book-toolbar">
+      <p>已完成 <strong id="book-progress">{{ done }}/{{ total }}</strong></p>
+      <button id="export-book" type="button" class="secondary" disabled>导出整书 Markdown</button>
     </div>
-    <div class="review-columns">
-      <div class="reading-text">
-        <h2>原文</h2><div class="text original">{{ current.original_text }}</div>
-        <h2>一读评述</h2><div class="text">{{ current.first_comment }}</div>
-        {% if current.source_type == 'paper' %}<p><a href="/quick?note={{ current.id }}">补充原文、一读与图片</a></p>{% endif %}
-        {% if current.source_type == 'image' %}<p><a href="/books/{{ book.id }}/image-drafts/{{ current.image_draft_id }}/edit">查看来源图片与识别记录</a></p>{% endif %}
+    <p class="muted" id="export-warning">{% if total > done %}仍有 {{ total - done }} 条待处理；导出会包含全部 {{ total }} 条笔记。{% else %}全部笔记已完成，导出包含整本书。{% endif %}</p>
+    <nav class="review-pages" aria-label="笔记分页">
+      {% if page > 1 %}<a class="button-link secondary" href="?page={{ page - 1 }}">上一页</a>{% endif %}
+      <span>第 {{ page }} / {{ pages }} 页 · 每页 30 条</span>
+      {% if page < pages %}<a class="button-link secondary" href="?page={{ page + 1 }}">下一页</a>{% endif %}
+      <form method="get" class="page-jump">
+        <label>跳到页码<input type="number" name="page" min="1" max="{{ pages }}" value="{{ page }}" required></label>
+        <button type="submit" class="secondary">跳转</button>
+      </form>
+    </nav>
+    {% for entry in entries %}
+    <article class="panel review-editor" id="note-{{ entry.id }}"
+      data-note-id="{{ entry.id }}" data-save-url="/api/books/{{ book.id }}/notes/{{ entry.id }}"
+      data-status="{{ entry.status }}" data-csrf="{{ csrf }}"
+      {% if entry.paper_revision is not none %}data-paper-revision="{{ entry.paper_revision }}"{% endif %}>
+      <div class="note-heading">
+        <p class="eyebrow">笔记 {{ (page - 1) * 30 + loop.index }} / {{ total }}</p>
+        <span class="note-status status-badge">{{ '已完成' if entry.status == 'done' else '待处理' }}</span>
       </div>
-      <div class="review-input">
-        <label for="second-comment">二读评述 <span class="muted">纯文本，可以留空</span></label>
-        <textarea id="second-comment" name="second_comment" rows="12" maxlength="50000" disabled>
-{{ current.second_comment }}</textarea>
+      <h2>原文</h2><div class="text original">{{ entry.original_text }}</div>
+      <h2>一读评述</h2><div class="text first-comment">{{ entry.first_comment }}</div>
+      {% if entry.source_type == 'paper' %}
+      <details class="record-ocr" data-src="/quick?note={{ entry.id }}&amp;view=ocr">
+        <summary>来源图片 · 识别与校对</summary>
+        <p><a href="/quick?note={{ entry.id }}#quick-ocr-section">在快速记录中打开同一条记录</a></p>
+        <p class="ocr-loading" role="status"></p>
+      </details>
+      {% elif entry.source_type == 'image' %}
+      <p><a href="/books/{{ book.id }}/image-drafts/{{ entry.image_draft_id }}/edit">查看来源图片与识别记录</a></p>
+      {% endif %}
+      <details class="second-reading">
+        <summary>二读评述{% if entry.second_comment %} · 已有内容{% endif %}</summary>
+        <label for="second-{{ entry.id }}">二读评述 <span class="muted">纯文本，可以留空</span></label>
+        <textarea id="second-{{ entry.id }}" class="second-comment" rows="6" maxlength="50000" disabled>{{ entry.second_comment }}</textarea>
         <div class="save-row">
-          <p id="save-status" role="status" aria-live="polite">正在准备编辑…</p>
-          <button id="save-now" type="button" class="quiet" disabled>立即保存</button>
+          <p class="save-status" role="status" aria-live="polite">正在准备编辑…</p>
+          <button type="button" class="save-now quiet" disabled>立即保存</button>
         </div>
-        <p id="login-hint" class="muted" hidden>请先复制未保存的文字，再<a href="/login" target="_blank" rel="noopener">重新登录</a>并刷新本页。</p>
-        <noscript><p class="notice error">二读编辑和自动保存需要启用 JavaScript。当前只能查看已保存内容及<a href="/books/{{ book.id }}/export">导出已保存的整书内容</a>。</p></noscript>
-      </div>
-    </div>
-    <div class="review-navigation">
-      {% if previous_url %}<a class="button-link secondary" href="{{ previous_url }}">上一条</a>{% else %}<span class="nav-disabled">上一条</span>{% endif %}
-      {% if next_url %}<a class="button-link secondary" href="{{ next_url }}">下一条</a>{% else %}<span class="nav-disabled">下一条</span>{% endif %}
-      <button id="complete-next" type="button" disabled>完成并继续</button>
-      <button id="restore-pending" type="button" class="quiet" {% if current.status != 'done' %}hidden{% endif %} disabled>恢复待处理</button>
-    </div>
-  </section>
-  {% endif %}
+        <p class="login-hint muted" hidden>请复制未保存文字，在另一页<a href="/login" target="_blank" rel="noopener">重新登录</a>后刷新。</p>
+        <div class="review-navigation">
+          <button type="button" class="complete-note" disabled>标记已完成</button>
+          <button type="button" class="restore-pending quiet" {% if entry.status != 'done' %}hidden{% endif %} disabled>恢复待处理</button>
+        </div>
+      </details>
+    </article>
+    {% endfor %}
+    <p class="muted">第 {{ page }} / {{ pages }} 页；导出始终包含全书 {{ total }} 条。</p>
+    <noscript>二读编辑和自动保存需要 JavaScript。<a href="/books/{{ book.id }}/export">导出已保存的整书内容</a></noscript>
+  </div>
 {% endif %}
 {% if imported %}
   <details class="panel">
     <summary>导入信息</summary>
-    <p class="muted">已成功导入 {{ markdown_count }} 条 Markdown 笔记。本书不能再次导入 Markdown，仍可追加图片摘录。</p>
+    <p class="muted">已成功导入 {{ markdown_count }} 条 Markdown 笔记。本书不能再次导入 Markdown，仍可使用快速记录。</p>
     <p><a href="/books/{{ book.id }}/source">下载原始 Markdown 文件</a></p>
   </details>
 {% else %}
   <section class="panel">
     <h2>导入 Zotero 笔记</h2>
-    <p>上传后先检查解析结果。每本书只接受一次 Markdown 导入，图片摘录可持续追加。</p>
+    <p>上传后先检查解析结果。每本书只接受一次 Markdown 导入，快速记录可持续追加。</p>
     <p class="muted">支持 UTF-8 的 .md 文件，最大 2 MiB；本阶段不读取 EPUB/PDF 原文件。</p>
     <form action="/books/{{ book.id }}/imports" method="post" enctype="multipart/form-data" class="stack">
       <input type="hidden" name="csrf" value="{{ csrf }}">

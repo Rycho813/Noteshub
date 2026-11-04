@@ -8,6 +8,20 @@
 .quick-photos li { padding: .6rem; border: 1px solid #d5dfd8; border-radius: 8px; }
 .quick-photos img { display: block; width: 100%; height: 130px; object-fit: contain; }
 .quick-photos button { padding: .45rem; min-height: 42px; margin: .2rem; }
+.quick-photos button.quick-photo-open { display: block; width: 100%; margin: 0 0 .4rem; background: #f2f3ee; color: var(--accent); }
+.quick-photo-open span { display: block; font-size: .85rem; }
+html.quick-viewer-open { overflow: hidden; }
+#quick-viewer { position: fixed; inset: 0; width: 100%; height: 100%; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: #18231e; color: #fff; }
+#quick-viewer[open] { display: grid; grid-template-rows: auto minmax(0,1fr); }
+#quick-viewer::backdrop { background: #18231e; }
+.quick-viewer-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; padding: .6rem; padding-top: max(.6rem,env(safe-area-inset-top)); padding-left: max(.6rem,env(safe-area-inset-left)); padding-right: max(.6rem,env(safe-area-inset-right)); }
+#quick-viewer-status { flex: 1 1 auto; }
+#quick-viewer-close { margin-left: auto; }
+.quick-viewer-toolbar button { min-height: 44px; padding: .5rem .75rem; background: #f2f3ee; color: #23342f; border-color: #b5c6bc; }
+.quick-viewer-toolbar small { flex-basis: 100%; }
+#quick-viewer-stage { overflow: auto; min-height: 0; min-width: 0; overscroll-behavior: contain; touch-action: pan-x pan-y pinch-zoom; padding-bottom: env(safe-area-inset-bottom); }
+.quick-viewer-canvas { display: grid; place-items: center; width: max-content; min-width: 100%; min-height: 100%; }
+#quick-viewer-image { display: block; max-width: none; max-height: none; }
 #quick-list button { display: block; width: 100%; text-align: left; margin-bottom: .6rem; overflow-wrap: anywhere; }
 #quick-error, #quick-remote { white-space: pre-wrap; overflow-wrap: anywhere; }
 #quick-status { font-weight: 600; }

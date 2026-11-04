@@ -31,6 +31,7 @@
         <label class="button-link secondary">批量选图<input id="quick-files" type="file" accept="image/*" multiple hidden disabled></label>
       </div>
       <p id="quick-photo-status" role="status"></p>
+      <p class="muted">点击图片查看大图；可放大、缩小，关闭后继续编辑。本机已有图片离线也可查看。</p>
       <ol id="quick-photos" class="quick-photos"></ol>
       <details><summary>补充原文与二读</summary>
         <label for="quick-original">原文</label><textarea id="quick-original" rows="8" maxlength="50000" disabled></textarea>
@@ -64,5 +65,18 @@
     </details>
     <noscript>快速记录需要启用 JavaScript；原有书籍、导入和导出仍可从首页访问。</noscript>
   </main>
+  <dialog id="quick-viewer" aria-label="图片查看器" aria-describedby="quick-viewer-help">
+    <div class="quick-viewer-toolbar">
+      <span id="quick-viewer-status" role="status" aria-live="polite"></span>
+      <button id="quick-viewer-close" type="button" autofocus>关闭大图</button>
+      <button id="quick-viewer-out" type="button">缩小</button>
+      <button id="quick-viewer-in" type="button">放大</button>
+      <button id="quick-viewer-fit" type="button">适应屏幕</button>
+      <small id="quick-viewer-help">放大后滑动或滚动查看；电脑可按 Esc 关闭。</small>
+    </div>
+    <div id="quick-viewer-stage" tabindex="0" aria-label="大图，可滚动查看">
+      <div class="quick-viewer-canvas"><img id="quick-viewer-image" alt="" draggable="false"></div>
+    </div>
+  </dialog>
 </body>
 </html>

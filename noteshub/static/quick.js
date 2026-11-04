@@ -8,6 +8,62 @@
   let lastError = '', localFailed = false, syncFailed = false, urls = [], retryTimer;
   const fields = {first_comment:$('quick-thought'),original_text:$('quick-original'),second_comment:$('quick-second')};
   const pendingPhotos = new Map();
+  const viewer = $('quick-viewer'), viewerImage = $('quick-viewer-image'), viewerStage = $('quick-viewer-stage');
+  let viewedPhoto, viewerURL, zoom = 1, photoPaint = 0, viewerResizeFrame;
+  function sizeViewer() {
+    if (!viewer.open || !viewerImage.naturalWidth) return;
+    const height = viewerStage.clientHeight-parseFloat(getComputedStyle(viewerStage).paddingBottom);
+    const fit = Math.min(viewerStage.clientWidth/viewerImage.naturalWidth,height/viewerImage.naturalHeight);
+    const width = Math.max(1,Math.floor(viewerImage.naturalWidth*fit*zoom))+'px';
+    const imageHeight = Math.max(1,Math.floor(viewerImage.naturalHeight*fit*zoom))+'px';
+    if (viewerImage.style.width !== width) viewerImage.style.width = width;
+    if (viewerImage.style.height !== imageHeight) viewerImage.style.height = imageHeight;
+    $('quick-viewer-status').textContent = viewedPhoto.label+' · '+Math.round(zoom*100)+'%';
+    $('quick-viewer-out').disabled = zoom <= 1;
+    $('quick-viewer-in').disabled = zoom >= 4;
+  }
+  function zoomViewer(value) {
+    zoom = Math.max(1,Math.min(4,value)); sizeViewer();
+    viewerStage.scrollTo(0,0);
+  }
+  function showPhoto(photo,id,index,note) {
+    if (viewer.open) return;
+    viewedPhoto = {id,noteId:note.id,label:'图片 '+(index+1)+' / '+note.photos.length};
+    viewerURL = URL.createObjectURL(photo.blob);
+    viewerImage.alt = viewedPhoto.label;
+    viewerImage.src = viewerURL; zoom = 1;
+    document.documentElement.classList.add('quick-viewer-open');
+    viewer.showModal(); sizeViewer();
+    viewerStage.scrollTo(0,0);
+  }
+  viewerImage.addEventListener('load',sizeViewer);
+  function finishViewer() {
+    // Native close events are queued. An earlier close must never clean up a
+    // new image that the user has already opened in the meantime.
+    if (viewer.open) return;
+    viewerImage.removeAttribute('src');
+    if (viewerURL) URL.revokeObjectURL(viewerURL);
+    viewerURL = null;
+    document.documentElement.classList.remove('quick-viewer-open');
+    if (current?.id === viewedPhoto?.noteId) {
+      const button = [...$('quick-photos').querySelectorAll('.quick-photo-open')].find(b => b.dataset.photoId === viewedPhoto.id);
+      button?.focus({preventScroll:true});
+    }
+    viewedPhoto = null;
+  }
+  function closeViewer() { viewer.close(); finishViewer(); }
+  $('quick-viewer-close').addEventListener('click',closeViewer);
+  viewer.addEventListener('cancel',event => { event.preventDefault(); closeViewer(); });
+  $('quick-viewer-in').addEventListener('click',() => zoomViewer(zoom*1.5));
+  $('quick-viewer-out').addEventListener('click',() => zoomViewer(zoom/1.5));
+  $('quick-viewer-fit').addEventListener('click',() => zoomViewer(1));
+  viewer.addEventListener('close',finishViewer);
+  new ResizeObserver(() => {
+    // Scrollbar changes can resize the stage too. Resize in the next frame so
+    // WebKit does not report an observer loop while zooming or rotating.
+    cancelAnimationFrame(viewerResizeFrame);
+    viewerResizeFrame = requestAnimationFrame(sizeViewer);
+  }).observe(viewerStage);
   const request = item => new Promise((resolve,reject) => { item.onsuccess = () => resolve(item.result); item.onerror = () => reject(item.error); });
   function transaction(stores,mode,callback) {
     return new Promise((resolve,reject) => {
@@ -57,17 +113,30 @@
     }
   }
   async function paintPhotos() {
-    urls.forEach(url => URL.revokeObjectURL(url)); urls = [];
-    $('quick-photos').replaceChildren();
-    const note = current;
+    const note = current, generation = ++photoPaint, photos = [];
     for (const [index,id] of note.photos.entries()) {
       const photo = pendingPhotos.get(key(id)) || await get('photos',key(id));
-      if (current !== note) return;
+      if (current !== note || generation !== photoPaint) return;
+      photos.push({id,index,photo});
+    }
+    urls.forEach(url => URL.revokeObjectURL(url)); urls = [];
+    $('quick-photos').replaceChildren();
+    for (const {id,index,photo} of photos) {
       const li = document.createElement('li'), img = document.createElement('img');
+      const preview = document.createElement('button'), caption = document.createElement('span');
+      preview.type = 'button'; preview.className = 'quick-photo-open'; preview.dataset.photoId = id;
+      preview.setAttribute('aria-haspopup','dialog');
+      preview.setAttribute('aria-label','查看图片 '+(index+1)+' 大图');
       img.alt = '图片 ' + (index+1);
-      if (photo?.blob) { const url = URL.createObjectURL(photo.blob); urls.push(url); img.src = url; }
-      else img.alt += note.photo_meta?.find(p => p.id===id)?.purged_at ? '（已确认清理）' : '（联网后可查看）';
-      li.append(img);
+      if (photo?.blob) {
+        const url = URL.createObjectURL(photo.blob); urls.push(url); img.src = url;
+        caption.textContent = '查看大图';
+        preview.addEventListener('click',() => showPhoto(photo,id,index,note));
+      } else {
+        caption.textContent = note.photo_meta?.find(p => p.id===id)?.purged_at ? '已确认清理' : '联网后可查看';
+        preview.disabled = true;
+      }
+      preview.append(img,caption); li.append(preview);
       for (const [label,offset] of [['前移',-1],['后移',1],['移除',0]]) {
         const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary'; button.textContent = label;
         button.disabled = offset !== 0 && (index+offset < 0 || index+offset >= note.photos.length);

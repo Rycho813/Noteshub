@@ -1,5 +1,7 @@
 # NotesHub V3：纸质书快速记录
 
+当前第 2/5 大步骤、第 3/3 小步骤，分支 `codex/noteshub-v3-photo-viewer`。图片查看功能与当前测试站 `https://noteshub-test.rychoz.com` 的升级/真机验收统一见 [图片查看升级与验收](v3-photo-viewer.md)。下文纸书分支的旧发布命令保留为历史记录，本次请使用新说明；图片查看验收通过后再继续第 3/5 步 Windows 本地 OCR。
+
 ## 增量方案
 
 保留 FastAPI、SQLite、单用户会话、现有书籍与 notes 表、Markdown 解析器及导出器。V2 已归档图片和 OCR 历史保持不变。纸质书记录使用 notes 的新来源 `paper`，一读、原文、二读沿用现有字段；多图、同步版本和本地识别任务使用附属表。每书一次 Zotero Markdown 导入规则不变，纸质书记录可持续追加，导出继续使用同一格式。

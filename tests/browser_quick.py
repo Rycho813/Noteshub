@@ -24,6 +24,10 @@ def run():
             image=tmp/f'page-{i}.png';Image.new('RGB',(320,100),(200+i*20,220,240)).save(image);images.append(str(image))
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+        port=int(os.environ.get('NOTESHUB_BROWSER_PORT',port))
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            listener.bind(('127.0.0.1',port))
         base=f'http://127.0.0.1:{port}'
         with (tmp/'server.log').open('w+') as log:
             server=subprocess.Popen([str(ROOT/'.venv/bin/python'),'-m','uvicorn','noteshub.web:create_app','--factory','--host','127.0.0.1','--port',str(port)],cwd=ROOT,
@@ -142,6 +146,14 @@ def run():
                     tab.locator('#quick-camera').set_input_files(images[0])
                     tab.wait_for_function("() => document.getElementById('quick-status').textContent.startsWith('本机保存失败')")
                     assert tab.locator('#quick-photos li').count()==2
+                    # Even a photo retained only in memory can be viewed while
+                    # the quota failure stays visible and all edits stay intact.
+                    tab.locator('.quick-photo-open').last.click()
+                    tab.wait_for_function("() => document.getElementById('quick-viewer-image').naturalWidth > 0")
+                    tab.locator('#quick-viewer-in').click()
+                    tab.locator('#quick-viewer-close').click()
+                    assert tab.locator('#quick-thought').input_value()=='磁盘不足时输入也不能消失'
+                    assert tab.locator('#quick-status').inner_text().startswith('本机保存失败')
                     tab.get_by_text('离线使用与本机备份',exact=True).click()
                     with tab.expect_download() as photo_recovery:tab.locator('#quick-backup').click()
                     import json

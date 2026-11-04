@@ -6,6 +6,8 @@
 
 ## V3 纸质书快速记录与本地 OCR
 
+当前第 2/5 大步骤、第 3/3 小步骤：图片查看开发与本地自动验证完成，待测试站升级和真机验收。快速记录页支持点击缩略图查看大图、放大/缩小及关闭返回，本机已有图片可离线查看。当前功能分支为 `codex/noteshub-v3-photo-viewer`；升级与电脑/iPhone 合并验收步骤见 [图片查看升级与验收](docs/v3-photo-viewer.md)。真机图片查看通过后再进入第 3/5 步 Windows 本地 OCR。
+
 新增 `/quick` 手机 PWA：想法优先、多图、IndexedDB 离线保存、联网同步、版本冲突保护。电脑端按需运行 RapidOCR/PaddleOCR ONNX 模型，通过专用任务 API 领取并回传结果；服务器不运行模型。人工采用、校对并同步后，可确认 30 天后清理图片，期间可取消；未确认图片不会自动清理。
 
 Zotero Markdown 导入、评注处理、二读、整书导出和 V2 图片来源保留。数据库增量升级到 schema v6。代码与自动化在独立分支完成，尚未部署到用户服务器；不更新 main、不调用收费 OCR。使用、数据安全、独立测试升级见 [V3 说明](docs/v3-paper-notes.md)，Windows 安装见 [本地 OCR](tools/local_ocr/README.md)。

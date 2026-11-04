@@ -26,6 +26,10 @@ def run():
         Image.new('RGB',(240,80),(220,220,255)).save(image)
         with socket.socket() as s:
             s.bind(('127.0.0.1',0)); port=s.getsockname()[1]
+        port=int(os.environ.get('NOTESHUB_BROWSER_PORT',port))
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            listener.bind(('127.0.0.1',port))
         base=f'http://127.0.0.1:{port}'
         with (tmp/'server.log').open('w+') as log:
             server=subprocess.Popen([str(ROOT/'.venv/bin/python'),'-m','uvicorn','noteshub.web:create_app','--factory','--host','127.0.0.1','--port',str(port)],cwd=ROOT,env={**os.environ,'NOTESHUB_DATA_DIR':str(data),'NOTESHUB_COOKIE_SECURE':'false','NOTESHUB_OCR_ENABLED':'false'},stdout=log,stderr=log)

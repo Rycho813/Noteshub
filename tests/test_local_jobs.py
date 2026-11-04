@@ -6,6 +6,9 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import types
+import unittest
+from contextlib import redirect_stdout, redirect_stderr
 import time
 from unittest.mock import patch
 
@@ -225,3 +228,43 @@ class LocalJobsTests(WebCase):
             with worker.worker_lock(Path(tmp)):
                 with self.assertRaises(worker.WorkerError):
                     with worker.worker_lock(Path(tmp)):pass
+
+
+class ClipboardConfigureTests(unittest.TestCase):
+    def test_clipboard_config_never_echoes_secret_and_keeps_exclusive_write(self):
+        token='nh_'+'fixture_'*8
+        with tempfile.TemporaryDirectory() as folder:
+            target=Path(folder)/'config.json'
+            output=io.StringIO();tls=worker.ssl.create_default_context()
+            with patch.object(worker.ssl,'create_default_context',return_value=tls), patch.object(worker.sys,'platform','win32'), patch.object(worker.subprocess,'run',return_value=types.SimpleNamespace(returncode=0,stdout=token+'\r\n')) as call, patch.object(worker.getpass,'getpass',side_effect=AssertionError('interactive input used')), redirect_stdout(output):
+                worker.main(['--config',str(target),'configure','--url','https://example.org','--clipboard'])
+            self.assertEqual(json.loads(target.read_text())['token'],token)
+            self.assertNotIn(token,output.getvalue())
+            self.assertNotIn(token,' '.join(call.call_args.args[0]))
+            self.assertIn('Get-Clipboard -Raw',call.call_args.args[0][-1])
+            with patch.object(worker,'clipboard_token',return_value=token),redirect_stderr(output),self.assertRaises(SystemExit):
+                worker.main(['--config',str(target),'configure','--url','https://example.org','--clipboard'])
+            self.assertEqual(json.loads(target.read_text())['token'],token)
+            self.assertNotIn(token,output.getvalue())
+
+    def test_bad_clipboard_is_rejected_without_echo_or_config(self):
+        for value in ('','copied command text','nh_'+'x'*45+'\x16'):
+            with tempfile.TemporaryDirectory() as folder:
+                target=Path(folder)/'config.json';output=io.StringIO()
+                with patch.object(worker,'clipboard_token',return_value=value),redirect_stderr(output),self.assertRaises(SystemExit):
+                    worker.main(['--config',str(target),'configure','--url','https://example.org','--clipboard'])
+                self.assertFalse(target.exists())
+                if value:self.assertNotIn(value,output.getvalue())
+
+    def test_clipboard_errors_are_private_and_windows_only(self):
+        secret='fixture sensitive clipboard error'
+        for result in (types.SimpleNamespace(returncode=1,stdout=secret),):
+            with patch.object(worker.sys,'platform','win32'),patch.object(worker.subprocess,'run',return_value=result),self.assertRaises(worker.WorkerError) as error:
+                worker.clipboard_token()
+            self.assertNotIn(secret,str(error.exception))
+        with patch.object(worker.sys,'platform','linux'),patch.object(worker.subprocess,'run') as call,self.assertRaises(worker.WorkerError):
+            worker.clipboard_token()
+        call.assert_not_called()
+        with patch.object(worker.sys,'platform','win32'),patch.object(worker.subprocess,'run',side_effect=worker.subprocess.TimeoutExpired(secret,10)),self.assertRaises(worker.WorkerError) as error:
+            worker.clipboard_token()
+        self.assertNotIn(secret,str(error.exception))

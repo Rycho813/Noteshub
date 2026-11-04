@@ -62,6 +62,11 @@
       <p>专用凭证仅可领取本地 OCR 任务、读取任务图片和回传结果。保存在自己的电脑中，可随时撤销。</p>
       <button id="quick-token-new" class="secondary">生成电脑专用凭证</button>
       <label id="quick-token-label" hidden>新凭证（只显示本次，请复制到电脑配置）<input id="quick-token-value" type="password" readonly autocomplete="off"></label>
+      <div id="quick-token-tools" class="quick-toolbar" hidden>
+        <button id="quick-token-show" type="button" class="secondary" aria-pressed="false" aria-controls="quick-token-value">显示凭证</button>
+        <button id="quick-token-copy" type="button" class="secondary">复制凭证</button>
+      </div>
+      <p id="quick-token-status" role="status" aria-live="polite"></p>
       <div id="quick-tokens"></div>
     </details>
     <details class="panel"><summary>离线使用与本机备份</summary>

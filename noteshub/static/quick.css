@@ -35,3 +35,5 @@ html.quick-viewer-open { overflow: hidden; }
 .quick-ocr-view #quick-create-book, .quick-ocr-view #quick-app > section:not(#quick-editor),
 .quick-ocr-view #quick-app > details, .quick-ocr-view #quick-new { display: none; }
 .quick-ocr-view #quick-app { padding: .5rem; }
+
+#quick-token-tools[hidden] { display: none; }

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import ssl
+import subprocess
 import sys
 import tempfile
 import threading
@@ -43,6 +44,23 @@ def validate_url(value):
     return value.rstrip('/')
 
 
+def clipboard_token():
+    """Explicit Windows-only input; never echo clipboard contents or child errors."""
+    if sys.platform != 'win32':
+        raise WorkerError('--clipboard 仅支持 Windows，请使用交互输入。')
+    try:
+        result = subprocess.run(
+            ['powershell.exe', '-NoProfile', '-NonInteractive', '-STA', '-Command',
+             '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); Get-Clipboard -Raw'],
+            capture_output=True, encoding='utf-8', timeout=10,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        raise WorkerError('无法读取 Windows 剪贴板，请重新复制凭证或使用交互输入。') from None
+    if result.returncode != 0:
+        raise WorkerError('无法读取 Windows 剪贴板，请重新复制凭证或使用交互输入。')
+    return result.stdout.strip().lstrip('\ufeff')
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         raise WorkerError('服务器返回重定向，已停止以保护电脑专用凭证；请检查 HTTPS 地址。')
@@ -52,7 +70,7 @@ class Client:
     def __init__(self, url, token):
         self.url=validate_url(url)
         if not isinstance(token,str) or not re.fullmatch(r'nh_[A-Za-z0-9_-]{40,100}',token):
-            raise WorkerError('电脑专用凭证格式无效。')
+            raise WorkerError('电脑专用凭证格式无效：请复制以 nh_ 开头的完整凭证；终端粘贴无效时可使用 configure --clipboard。')
         self.token=token
         handlers=[NoRedirect(),urllib.request.HTTPSHandler(context=ssl.create_default_context())]
         if urllib.parse.urlsplit(self.url).hostname in ('localhost','127.0.0.1','::1'):
@@ -219,13 +237,15 @@ def main(argv=None):
     commands=parser.add_subparsers(dest='command',required=True)
     configure=commands.add_parser('configure',help='交互输入专用凭证，不放入命令历史')
     configure.add_argument('--url',required=True)
+    configure.add_argument('--clipboard',action='store_true',help='从 Windows 剪贴板读取凭证，不显示内容')
     run=commands.add_parser('run',help='处理已排队任务后退出')
     run.add_argument('--max-jobs',type=int,default=20)
     run.add_argument('--device',choices=['cpu','cuda'],default='cpu')
     args=parser.parse_args(argv)
     try:
         if args.command=='configure':
-            url=validate_url(args.url);token=getpass.getpass('粘贴电脑专用凭证（不显示）：').strip()
+            url=validate_url(args.url)
+            token=clipboard_token() if args.clipboard else getpass.getpass('粘贴电脑专用凭证（不显示）：').strip()
             Client(url,token)
             private_write(args.config,{'url':url,'token':token},exclusive=True)
             print('本地配置已保存；现有配置不会被覆盖。')

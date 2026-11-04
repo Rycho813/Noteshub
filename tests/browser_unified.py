@@ -26,6 +26,64 @@ def synced(page):
     expect(page.locator('#quick-status')).to_have_text('已同步',timeout=30000)
 
 
+
+def credentials(context,base,tmp,label):
+    page=context.new_page();errors=[]
+    page.on('pageerror',lambda e:errors.append(str(e)))
+    login(page,base);page.goto(base+'/quick');ready(page)
+    page.locator('#quick-desktop summary').click()
+    page.locator('#quick-token-new').click()
+    page.wait_for_function("() => document.getElementById('quick-token-value').value.startsWith('nh_')")
+    expect(page.locator('#quick-token-value')).to_have_attribute('type','password')
+    expect(page.locator('#quick-token-tools')).to_be_visible()
+    page.locator('#quick-token-show').click()
+    expect(page.locator('#quick-token-value')).to_have_attribute('type','text')
+    page.locator('#quick-token-show').click()
+    expect(page.locator('#quick-token-value')).to_have_attribute('type','password')
+    context.grant_permissions(['clipboard-read','clipboard-write'])
+    page.locator('#quick-token-copy').click()
+    expect(page.locator('#quick-token-status')).to_contain_text('已复制完整凭证')
+    assert page.evaluate("async () => (await navigator.clipboard.readText())===document.getElementById('quick-token-value').value")
+    assert page.evaluate("""async () => {
+      const secret=document.getElementById('quick-token-value').value;
+      const db=await new Promise((resolve,reject) => {const r=indexedDB.open('noteshub-quick');r.onsuccess=() => resolve(r.result);r.onerror=reject;});
+      try {
+        for(const name of db.objectStoreNames) {
+          const rows=await new Promise((resolve,reject) => {const r=db.transaction(name).objectStore(name).getAll();r.onsuccess=() => resolve(r.result);r.onerror=reject;});
+          if(JSON.stringify(rows).includes(secret))return false;
+        }
+        return true;
+      } finally {db.close();}
+    }""")
+    # A rejected clipboard permission offers selectable visible text.
+    page.evaluate("() => Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async () => {throw new DOMException('fixture denied','NotAllowedError');}}})")
+    page.locator('#quick-token-copy').click()
+    expect(page.locator('#quick-token-status')).to_contain_text('已显示并选中')
+    expect(page.locator('#quick-token-value')).to_have_attribute('type','text')
+    assert page.locator('#quick-token-value').evaluate('(input) => input.selectionStart===0 && input.selectionEnd===input.value.length')
+    page.locator('#quick-desktop summary').click()
+    expect(page.locator('#quick-token-value')).to_have_value('')
+    expect(page.locator('#quick-token-tools')).to_be_hidden()
+    # A response arriving after the panel closes must not redisplay a secret.
+    page.locator('#quick-desktop summary').click()
+    page.evaluate("""() => {
+      const q=NotesHubQuick,original=q.api;
+      q.api=async (...args) => {
+        const response=await original(...args);
+        if(args[0]==='/api/paper/worker-tokens' && args[1])await new Promise(resolve => {window.releaseToken=resolve;});
+        return response;
+      };
+    }""")
+    page.locator('#quick-token-new').click()
+    page.wait_for_function('() => Boolean(window.releaseToken)')
+    page.locator('#quick-desktop summary').click()
+    page.evaluate('() => window.releaseToken()')
+    expect(page.locator('#quick-token-new')).to_be_enabled()
+    expect(page.locator('#quick-token-value')).to_have_value('')
+    assert not errors,errors
+    page.close();print('PASS credential show/hide/copy/fallback/private-storage/late-response '+label,flush=True)
+
+
 def workflow(context, base, tmp, label):
     page=context.new_page();errors=[]
     def watch(target):
@@ -244,7 +302,7 @@ def run(name,mode='all'):
                     for mobile in ((True,) if mode=='mobile' else (False,) if mode=='desktop' else (False,True)):
                         label=name+('-mobile' if mobile else '-desktop')
                         context=engine.launch_persistent_context(str(tmp/label),headless=True,viewport={'width':390,'height':844} if mobile else {'width':1280,'height':1000},is_mobile=mobile,has_touch=mobile,**({'args':['--no-sandbox']} if name=='chromium' else {}))
-                        try:workflow(context,base,tmp,label)
+                        try:(credentials if mode=='credentials' else workflow)(context,base,tmp,label)
                         except Exception:
                             for failed in context.pages:
                                 try:print('Failure UI:',failed.evaluate("() => ({url:location.href,error:document.getElementById('quick-error')?.textContent,viewer:document.getElementById('quick-viewer')?.open,editing:document.getElementById('quick-image-edit')?.hidden,diag:document.getElementById('quick-viewer')?.dataset})"),flush=True)
@@ -257,4 +315,4 @@ def run(name,mode='all'):
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--browser',choices=('chromium','webkit'),default='chromium');parser.add_argument('--mode',choices=('all','desktop','mobile'),default='all');args=parser.parse_args();run(args.browser,args.mode)
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--browser',choices=('chromium','webkit'),default='chromium');parser.add_argument('--mode',choices=('all','desktop','mobile','credentials'),default='all');args=parser.parse_args();run(args.browser,args.mode)

@@ -6,7 +6,7 @@
 
 ## V3 纸质书快速记录与本地 OCR
 
-当前第 **2/5 大步骤、小步骤 4/4：七点整合版验证与交付**，功能分支 `codex/noteshub-v3-unified-records`。快速记录整合选书/离线建书、想法、多图、截图粘贴、裁剪旋转与可选本地 OCR；持续自动保存和同步，无确认记录门槛。书籍页每页 30 条，二读与识别面板默认折叠，整书导出仍包含全部笔记。测试实例升级、限定旧草稿清理及合并验收见 [统一记录升级与验收](docs/v3-unified-records.md)。本地自动验证不代表测试站升级或 iPhone 真机验收；通过后再进入第 3/5 步 Windows 本地 OCR。
+当前第 **3/5 大步骤、小步骤 2/3：连接 Windows 本地 OCR 与首条识别**，功能分支 `codex/noteshub-v3-unified-records`。用户已确认第 2 步七点整合版测试站与真机验收通过；Windows Python 3.12.10（64 位）、OCR 依赖检查和 CPU 模型加载已通过，真实书页识别尚待验证。凭证区新增显示/隐藏和复制按钮；Windows 可用 `configure --clipboard` 避免隐藏输入的终端粘贴问题，见 [本地 OCR 指南](tools/local_ocr/README.md)。独立测试升级说明见 [统一记录升级与验收](docs/v3-unified-records.md)，服务器升级仍由用户执行。
 
 新增 `/quick` 手机 PWA：想法优先、多图、IndexedDB 离线保存、联网同步、版本冲突保护。电脑端按需运行 RapidOCR/PaddleOCR ONNX 模型，通过专用任务 API 领取并回传结果；服务器不运行模型。人工采用、校对并同步后，可确认 30 天后清理图片，期间可取消；未确认图片不会自动清理。
 

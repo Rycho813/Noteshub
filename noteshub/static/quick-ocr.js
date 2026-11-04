@@ -79,16 +79,51 @@
       $('quick-tokens').append(p);
     }
   }
+  let tokenEpoch=0;
+  function clearToken() {
+    tokenEpoch++;
+    $('quick-token-value').value='';$('quick-token-value').type='password';
+    $('quick-token-label').hidden=true;$('quick-token-tools').hidden=true;
+    $('quick-token-show').textContent='显示凭证';$('quick-token-show').setAttribute('aria-pressed','false');
+    $('quick-token-status').textContent='';
+  }
+  $('quick-token-show').addEventListener('click',() => {
+    const shown=$('quick-token-value').type==='password';
+    $('quick-token-value').type=shown?'text':'password';
+    $('quick-token-show').textContent=shown?'隐藏凭证':'显示凭证';
+    $('quick-token-show').setAttribute('aria-pressed',String(shown));
+  });
+  $('quick-token-copy').addEventListener('click',async () => {
+    const value=$('quick-token-value').value,epoch=tokenEpoch;
+    if(!value)return;
+    try {
+      await navigator.clipboard.writeText(value);
+      if(epoch===tokenEpoch)$('quick-token-status').textContent='已复制完整凭证。请回到电脑配置；终端输入不会显示。';
+    } catch(_) {
+      if(epoch!==tokenEpoch)return;
+      $('quick-token-value').type='text';$('quick-token-value').focus();$('quick-token-value').select();
+      $('quick-token-show').textContent='隐藏凭证';$('quick-token-show').setAttribute('aria-pressed','true');
+      $('quick-token-status').textContent='浏览器未允许自动复制，已显示并选中，请按 Ctrl+C / Command+C。';
+    }
+  });
   $('quick-token-new').addEventListener('click',() => q.safe(async () => {
-    await q.sync();
-    const result=await (await q.api('/api/paper/worker-tokens',{label:'Windows 本地 OCR'})).json();
-    $('quick-token-label').hidden=false;$('quick-token-value').value=result.token;
-    $('quick-token-value').focus();$('quick-token-value').select();await tokens();
+    if($('quick-token-new').disabled)return;
+    $('quick-token-new').disabled=true;clearToken();const epoch=tokenEpoch;
+    try {
+      await q.sync();
+      const result=await (await q.api('/api/paper/worker-tokens',{label:'Windows 本地 OCR'})).json();
+      if(epoch===tokenEpoch && $('quick-desktop').open) {
+        $('quick-token-label').hidden=false;$('quick-token-tools').hidden=false;$('quick-token-value').value=result.token;
+        $('quick-token-status').textContent='凭证以 nh_ 开头，仅本次可查看；可点击显示或复制。不要发送到聊天或截图中。';
+      }
+      await tokens();
+    } finally {$('quick-token-new').disabled=false;}
   }));
   $('quick-desktop').addEventListener('toggle',() => {
     if ($('quick-desktop').open && q.getContext()) q.safe(tokens);
-    if (!$('quick-desktop').open) { $('quick-token-value').value='';$('quick-token-label').hidden=true; }
+    if (!$('quick-desktop').open)clearToken();
   });
+  window.addEventListener('pagehide',clearToken);
   $('quick-batch').addEventListener('click',() => q.safe(async () => {
     await q.sync();
     const result=await (await q.api('/api/paper/ocr-batch',{})).json();

@@ -19,7 +19,18 @@ py -3.12 -m venv .venv-ocr
 .\.venv-ocr\Scripts\python.exe tools\local_ocr\worker.py configure --url https://notes-test.example.com
 ```
 
-交互粘贴凭证，输入不显示。默认配置位于 `%LOCALAPPDATA%\NotesHub\local-ocr.json`，请使用自己的 Windows 用户账户，保留该目录默认的私人访问权限；不要放入共享目录。已有配置不会被覆盖。轮换时可用 `--config` 指定另一个私人文件，或先在网页撤销旧凭证，再另存配置。
+网页凭证默认隐藏，可用“显示凭证/隐藏凭证”切换，或点击“复制凭证”；关闭面板会清空显示。只有新生成凭证的本次页面可取回原文，下面“有效”列表不是凭证原文。
+
+交互粘贴凭证，输入不显示。终端报告“格式无效”时，先核对复制的是以 `nh_` 开头的完整凭证；不要把圆点、网页标签或命令当作凭证。Windows 终端粘贴不便时，可直接从剪贴板配置：
+
+```powershell
+Read-Host "现在去网页复制凭证，返回终端后只按回车" | Out-Null
+.\.venv-ocr\Scripts\python.exe tools\local_ocr\worker.py configure --url https://noteshub-test.rychoz.com --clipboard
+```
+
+先把整块命令粘贴到终端，等待提示后再去网页复制凭证，回来只按回车；不要再次复制命令，以免覆盖剪贴板。该方式不回显凭证，保持格式检查、HTTPS 和已有配置不覆盖的规则，不改全局剪贴板内容。
+
+默认配置位于 `%LOCALAPPDATA%\NotesHub\local-ocr.json`，请使用自己的 Windows 用户账户，保留该目录默认的私人访问权限；不要放入共享目录。已有配置不会被覆盖。轮换时可用 `--config` 指定另一个私人文件，或先在网页撤销旧凭证，再另存配置。
 
 本机 SSH 隧道测试允许 `http://127.0.0.1:18080`；普通公网 HTTP 地址不接受。HTTPS 证书必须可信，不提供跳过校验选项，API 重定向也会拒绝，防止凭证被转发。
 

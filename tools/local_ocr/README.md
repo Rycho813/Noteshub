@@ -2,6 +2,8 @@
 
 默认 Windows x64、Python 3.12、CPU。使用 RapidOCR 1.4.4 携带的 PaddleOCR ONNX 中文/英文模型，安装后识别在电脑进行；图片不发送到外部识别服务。这个目录的依赖不加入服务器 requirements，不需要电脑开放端口，也不需要电脑全天开机。
 
+2026-11-05 用户已在 Windows Python 3.12.10（64 位）、CPU 环境完成真实书页识别、回传、候选采用、刷新保留、评论和整书导出验收。已安装的独立 worker 位于 `%LOCALAPPDATA%\NotesHub\ocr-worker`；日常运行命令见 [统一记录指南](../../docs/v3-unified-records.md#用户验收后的日常使用与版本边界)，无需重复安装或生成凭证。
+
 ## 首次配置
 
 在 Windows 项目根目录的 PowerShell 中运行：
@@ -56,4 +58,4 @@ CPU 版本不要求显卡。`--device cuda` 入口会检查 CUDA provider，不�
 
 ## 开发验证
 
-在 Linux 开发环境已实际安装本目录依赖，使用合成多页图片完成模型推理和浏览器—服务器—本地 worker 的整个流程。Windows 真机、真实书页准确率、显卡性能仍需在你的设备验收。
+在 Linux 开发环境已实际安装本目录依赖，使用合成多页图片完成模型推理和浏览器—服务器—本地 worker 的整个流程。Windows CPU 真机与真实书页流程已由用户验收通过；这不代表所有书页的准确率保证，GPU 性能尚未验收。

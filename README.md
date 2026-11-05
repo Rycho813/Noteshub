@@ -6,11 +6,11 @@
 
 ## V3 纸质书快速记录与本地 OCR
 
-当前第 **3/5 大步骤、小步骤 2/3：连接 Windows 本地 OCR 与首条识别**，功能分支 `codex/noteshub-v3-unified-records`。用户已确认第 2 步七点整合版测试站与真机验收通过；Windows Python 3.12.10（64 位）、OCR 依赖检查和 CPU 模型加载已通过，真实书页识别尚待验证。凭证区新增显示/隐藏和复制按钮；Windows 可用 `configure --clipboard` 避免隐藏输入的终端粘贴问题，见 [本地 OCR 指南](tools/local_ocr/README.md)。独立测试升级说明见 [统一记录升级与验收](docs/v3-unified-records.md)，服务器升级仍由用户执行。
+当前第 **5/5 大步骤：交付收尾**，Windows 异机备份已通过，用户侧本轮验收完成。用户已确认第 2 步七点整合版测试站与真机验收，以及第 3 步 Windows Python 3.12.10（64 位）、CPU 本地 OCR 真实书页识别、候选采用、刷新保留、评论和导出通过。2026-11-05 用户在腾讯测试实例完成完整备份校验、独立空卷恢复和内容比较：7 本书、9 条笔记/快速记录、16 张现存图片、2 条成功本地 OCR 任务一致，4 本含笔记书籍的整书导出一致；随后将约 18 MiB 备份下载到 Windows，SHA-256 比较通过。原交接未定义第 4/5 步细项，按数据保护及交付目标安排；未为测试实例启用每日自动备份。GPU 不在已验证范围；不更新 main 或正式服务。功能分支 `codex/noteshub-v3-unified-records`；日常操作见 [统一记录升级与验收](docs/v3-unified-records.md)，Windows 使用见 [本地 OCR 指南](tools/local_ocr/README.md)。
 
 新增 `/quick` 手机 PWA：想法优先、多图、IndexedDB 离线保存、联网同步、版本冲突保护。电脑端按需运行 RapidOCR/PaddleOCR ONNX 模型，通过专用任务 API 领取并回传结果；服务器不运行模型。人工采用、校对并同步后，可确认 30 天后清理图片，期间可取消；未确认图片不会自动清理。
 
-Zotero Markdown 导入、评注处理、二读、整书导出和 V2 图片来源保留。数据库增量升级到 schema v6。代码与自动化在独立分支完成，尚未部署到用户服务器；不更新 main、不调用收费 OCR。使用、数据安全、独立测试升级见 [V3 说明](docs/v3-paper-notes.md)，Windows 安装见 [本地 OCR](tools/local_ocr/README.md)。
+Zotero Markdown 导入、评注处理、二读、整书导出和 V2 图片来源保留。数据库增量升级到 schema v6。七点整合版已由用户部署至独立测试站并验收；后续凭证显示/复制修复已发布至功能分支，尚未核实测试站已升级该修复。不更新 main、不改正式站、不调用收费 OCR。使用、数据安全、独立测试升级见 [V3 说明](docs/v3-paper-notes.md)，Windows 安装见 [本地 OCR](tools/local_ocr/README.md)。
 
 ## V2 图片识别、一读与正式归档（第 4/5 步历史说明）
 

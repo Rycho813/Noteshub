@@ -1,6 +1,6 @@
 # V3 七点整合版：测试实例升级与验收
 
-本指南对应第 **2/5 大步骤、小步骤 4/4** 的七点整合版交付；用户已确认测试站与真机验收通过，现进入 **第 3/5 步、小步骤 2/3：连接 Windows 本地 OCR**。分支 `codex/noteshub-v3-unified-records`；后续凭证显示/复制修复由用户按需升级测试站；已完成的第 2 步验收无需重做，旧草稿清理无需重复。不要把浏览器手机尺寸或 WebKit 验证记为真机通过。
+本指南对应第 **2/5 大步骤、小步骤 4/4** 的七点整合版交付；用户已确认测试站与真机验收通过，第 3 步 Windows CPU OCR 的识别、采用、刷新保留与评论/导出已由用户验收通过。2026-11-05 第 4 步测试实例备份、独立空卷恢复及内容/整书导出比较均通过，第 **5/5 步交付收尾** 的 Windows 异机备份也已通过 SHA-256 校验，用户侧本轮验收完成。分支 `codex/noteshub-v3-unified-records`；后续凭证显示/复制修复由用户按需升级测试站；已完成的第 2 步验收无需重做，旧草稿清理无需重复。不要把浏览器手机尺寸或 WebKit 验证记为真机通过。
 
 ## 本次行为
 
@@ -92,3 +92,24 @@ export NOTESHUB_BROWSER_PORT=18081
 ```
 
 浏览器依赖与当前结果见 [V3 验证记录](v3-validation.md)。所有测试服务依次启动并在结束后停止，不复用真实用户数据。发布包排除凭证、账号、数据库、备份、私有样本和临时浏览器环境。
+
+## 用户验收后的日常使用与版本边界
+
+2026-11-05，用户已验收七点整合版、Windows CPU 真实书页 OCR、独立恢复及 Windows 异机备份。测试站仍使用七点整合版镜像 `noteshub:v2-ocr-test-3f788ace4fcd`（源码提交 `416651787a6ddf8f5abae95a88bff3c3d4033ce6`）；功能分支后续提交 `704117bc000e80fb4a6a06b020e0823aaafbfc8b` 增加网页凭证显示/复制及 worker 剪贴板配置。Windows worker 已由用户更新，未核实测试站网页已升级该修复；日常使用现有凭证无需重新配置或重新生成。
+
+1. 手机或电脑使用测试站 `/quick` 记录、加图；联网时等到“已同步”。仍在浏览器中的离线内容需用本机恢复文件保护，不在服务器备份内。
+2. 需要 OCR 时，在网页排队，再在自己的 Windows PowerShell 运行以下命令。电脑退出或关机时新任务等待；刷新网页只查询状态，不会启动 OCR。
+
+   ```powershell
+   & {
+       $ErrorActionPreference = "Stop"
+       Set-Location (Join-Path $env:LOCALAPPDATA "NotesHub\ocr-worker")
+       .\.venv-ocr\Scripts\python.exe .\worker.py run --max-jobs 20 --device cpu
+       if ($LASTEXITCODE -ne 0) { throw "本地 OCR 未完成，请反馈报错" }
+   }
+   ```
+
+3. 回网页刷新识别状态，明确采用候选、人工校对并等待同步；一读、二读按需填写，书籍页可导出整书 Markdown。
+4. 本轮测试实例全量备份已由用户下载至 `%LOCALAPPDATA%\NotesHub\backups` 并校验，仅覆盖备份时已同步的数据。继续编辑后的内容需重新备份；恢复使用新空卷，现有恢复验证卷保留。
+
+历史 [备份运维说明](backup-operations.md) 的 systemd 任务针对正式项目 `noteshub`，不代表本轮测试实例已设置自动备份，不直接套用到测试实例。当前交付不更新 main、不改正式站、HTTPS 或 Windows 环境；正式部署、测试站定时备份与 GPU 如需另行实施，应单独明确范围。

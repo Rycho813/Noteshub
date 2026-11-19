@@ -146,7 +146,7 @@ class LocalJobs:
 
     def image(self, worker, job_id, photo_id, lease):
         with self.store.connection() as db:
-            db.execute('BEGIN')
+            db.execute('BEGIN IMMEDIATE')
             job=self.owned(db,worker,job_id,lease)
             if not any(p['id']==photo_id for p in json.loads(job['photos_json'])):
                 raise HTTPException(404,'图片不属于此任务。')

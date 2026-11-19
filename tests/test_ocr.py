@@ -1,3 +1,4 @@
+from contextlib import closing
 """All provider tests stub the HTTP transport; never call Tencent or incur fees."""
 import base64
 import io
@@ -115,6 +116,8 @@ class SDKTests(unittest.TestCase):
         self.assertIsInstance(NoopRetryer(),NoopRetryer)
 
     def test_credential_file_permissions_and_no_secret_in_errors(self):
+        if __import__("os").name == "nt":
+            self.skipTest("POSIX credential permissions require Linux")
         with tempfile.TemporaryDirectory() as tmp:
             file = Path(tmp)/'credentials.json'
             file.write_text(json.dumps({'SecretId':'unit-test-id','SecretKey':'unit-test-key'}))
@@ -374,7 +377,7 @@ class OCRTests(WebCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             restore(root,io.BytesIO(out.getvalue()))
-            with sqlite3.connect(root/'noteshub.sqlite3') as db:
+            with closing(sqlite3.connect(root/'noteshub.sqlite3')) as db, db:
                 self.assertEqual(db.execute('SELECT state,error_code FROM ocr_runs').fetchone(),('failed','Interrupted'))
         self.assertEqual(self.fake.calls,0)
 
@@ -386,7 +389,7 @@ class MigrationTests(unittest.TestCase):
             provision(root,'legacy-reader','legacy-test-password')
             filename='images/'+'a'*32+'.png'
             raw=picture()
-            with sqlite3.connect(root/'noteshub.sqlite3') as db:
+            with closing(sqlite3.connect(root/'noteshub.sqlite3')) as db, db:
                 db.executescript(SCHEMA+IMAGE_SCHEMA)
                 db.execute("INSERT INTO books VALUES ('book','legacy','',1)")
                 db.execute("INSERT INTO image_drafts VALUES ('draft','book',?,?,'image/png',?,80,40,1,9999999999)",(filename,hashlib.sha256(raw).hexdigest(),len(raw)))
@@ -398,7 +401,7 @@ class MigrationTests(unittest.TestCase):
             restore(new_root,io.BytesIO(archive.getvalue()))
             migrated=Store(Settings(new_root))
             with migrated.connection() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],6)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],7)
                 row=db.execute('SELECT * FROM image_drafts').fetchone()
                 self.assertEqual(row['file_path'],filename)
                 self.assertEqual(row['editing_started'],0)

@@ -12,11 +12,14 @@
     </form>
     <div class="book-list">
     {% for book in books %}
-      <a class="panel book-card" href="/books/{{ book.id }}">
-        <h2>{{ book.title }}</h2>
-        {% if book.author %}<p>{{ book.author }}</p>{% endif %}
-        <p class="muted">{% if book.total %}共 {{ book.total }} 条笔记 · 已完成 {{ book.done }}/{{ book.total }}{% else %}尚无正式笔记{% endif %}</p>
-      </a>
+      <article class="panel">
+        <a class="book-card" href="/books/{{ book.id }}">
+          <h2>{{ book.title }}</h2>
+          {% if book.author %}<p>{{ book.author }}</p>{% endif %}
+          <p class="muted">{% if book.total %}共 {{ book.total }} 条笔记 · 已完成 {{ book.done }}/{{ book.total }}{% else %}尚无正式笔记{% endif %}</p>
+        </a>
+        <a class="button-link danger book-delete" href="/books/{{ book.id }}/delete" aria-label="删除书籍：{{ book.title }}">删除书籍</a>
+      </article>
     {% else %}
       <p class="empty">{% if q %}没有找到匹配书名。{% else %}从新建一本书开始。{% endif %}</p>
     {% endfor %}

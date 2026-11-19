@@ -46,7 +46,12 @@ class ReleaseChecks(unittest.TestCase):
         extra.unlink()
         target=self.root/'noteshub/web.py'
         target.unlink()
-        target.symlink_to(self.root/'noteshub/ocr.py')
+        try:
+            target.symlink_to(self.root/'noteshub/ocr.py')
+        except OSError as exc:
+            if getattr(exc, 'winerror', None) == 1314:
+                self.skipTest('Windows symlink privilege unavailable')
+            raise
         with self.assertRaises(ValueError): verify(self.root)
 
     def test_invalid_paths_cannot_make_checker_read_outside_release(self):
@@ -59,10 +64,12 @@ class ReleaseChecks(unittest.TestCase):
 
 class CredentialWriterChecks(unittest.TestCase):
     def test_private_exclusive_creation_and_no_output(self):
+        if __import__("os").name == "nt":
+            self.skipTest("POSIX credential permissions require Linux")
         with tempfile.TemporaryDirectory() as tmp:
             target=Path(tmp)/'fake-test-credentials.json'
             capture=io.StringIO()
-            with patch('scripts.configure_ocr_credentials.os.fchown') as chown, contextlib.redirect_stdout(capture):
+            with patch('scripts.configure_ocr_credentials.os.fchown', create=True) as chown, contextlib.redirect_stdout(capture):
                 write_credentials(target,'fake-unit-id','fake-unit-key')
             chown.assert_called_once()
             self.assertEqual(chown.call_args.args[1:],(10001,10001))

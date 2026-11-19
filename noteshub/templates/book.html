@@ -56,16 +56,18 @@
           <button type="button" class="restore-pending quiet" {% if entry.status != 'done' %}hidden{% endif %} disabled>恢复待处理</button>
         </div>
       </details>
+      <a class="button-link danger" href="/books/{{ book.id }}/notes/{{ entry.id }}/delete">删除当前笔记</a>
     </article>
     {% endfor %}
     <p class="muted">第 {{ page }} / {{ pages }} 页；导出始终包含全书 {{ total }} 条。</p>
     <noscript>二读编辑和自动保存需要 JavaScript。<a href="/books/{{ book.id }}/export">导出已保存的整书内容</a></noscript>
   </div>
 {% endif %}
+<section class="panel" {% if total %}hidden{% endif %}><h2>当前没有笔记</h2><p>完成统计 0/0，无法导出。仍可快速记录；已导入的原文件仍保留。</p></section>
 {% if imported %}
   <details class="panel">
     <summary>导入信息</summary>
-    <p class="muted">已成功导入 {{ markdown_count }} 条 Markdown 笔记。本书不能再次导入 Markdown，仍可使用快速记录。</p>
+    <p class="muted">当前保留 {{ markdown_count }} 条 Markdown 笔记。本书不能再次导入 Markdown，仍可使用快速记录。</p>
     <p><a href="/books/{{ book.id }}/source">下载原始 Markdown 文件</a></p>
   </details>
 {% else %}

@@ -74,6 +74,8 @@ class PaperService:
         digest = hashlib.sha256(json.dumps([note_id, book_id, revision, fields, photos], ensure_ascii=False).encode()).hexdigest()
         with self.store.connection() as db:
             db.execute('BEGIN IMMEDIATE')
+            if db.execute("SELECT 1 FROM deleted_entities WHERE (kind='note' AND id=?) OR (kind='book' AND id=?)", (note_id,book_id)).fetchone():
+                raise HTTPException(410, '记录或书籍已永久删除，本机副本不会重新创建云端内容。')
             receipt = db.execute('SELECT * FROM paper_mutations WHERE id=?', (mutation,)).fetchone()
             if receipt:
                 if receipt['note_id'] != note_id or receipt['payload_sha'] != digest:
@@ -140,11 +142,7 @@ class PaperService:
                         os.link(temporary,path);created=True
                     finally:
                         os.unlink(temporary)
-                directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory)
-                finally:
-                    os.close(directory)
+                self.store.sync_directory(path.parent)
                 db.execute('INSERT INTO paper_photos(id,note_id,file_path,sha256,media_type,byte_size,width,height,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
                            (photo_id,note_id,relative,checksum,media_type,len(raw),width,height,int(time.time())))
             return {'id':photo_id,'sha256':checksum}
@@ -208,6 +206,8 @@ def install_paper(app, service, *, require_session, render, account_id):
         def save():
             with store.connection() as db:
                 db.execute('BEGIN IMMEDIATE')
+                if db.execute("SELECT 1 FROM deleted_entities WHERE kind='book' AND id=?", (book_id,)).fetchone():
+                    raise HTTPException(410, '书籍已永久删除，请新建书籍。')
                 old = db.execute('SELECT id,title,author FROM books WHERE id=?', (book_id,)).fetchone()
                 if old and (old['title'],old['author']) != (title,author):
                     raise HTTPException(409, '书籍编号已存在，请保留本机内容后重试。')
@@ -247,7 +247,7 @@ def install_paper(app, service, *, require_session, render, account_id):
         require_session(request)
         def read():
             with store.connection() as db:
-                db.execute('BEGIN')
+                db.execute('BEGIN IMMEDIATE')
                 row = db.execute('SELECT * FROM paper_photos WHERE id=? AND note_id=? AND purged_at IS NULL', (identifier(photo_id),identifier(note_id))).fetchone()
                 if row is None:
                     raise HTTPException(404, '图片不存在或已按确认计划清理。')

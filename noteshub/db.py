@@ -14,6 +14,7 @@ import sqlite3
 import time
 import uuid
 
+from noteshub import deletion
 from noteshub.paper_schema import PAPER_SCHEMA, LOCAL_OCR_SCHEMA
 from noteshub.config import Settings
 from noteshub.parser import confirm_preview, correct_record, parse_markdown
@@ -158,10 +159,29 @@ class Store:
                 version = 5
             if version == 5:
                 db.executescript("BEGIN IMMEDIATE;" + LOCAL_OCR_SCHEMA + "COMMIT;")
-            elif version != 6:
+                version = 6
+            if version == 6:
+                db.executescript("BEGIN IMMEDIATE;" + deletion.SCHEMA + "COMMIT;")
+            elif version != 7:
                 raise RuntimeError(f"不支持的数据库版本：{version}")
         self.cleanup()
-        self.recover_sources()
+
+    def sync_directory(self, path):
+        if path == self.sources:
+            return self.sync_sources()
+        self._sync_directory(path)
+
+    @staticmethod
+    def _sync_directory(path):
+        if os.name != "nt":
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+    def sync_sources(self):
+        self._sync_directory(self.sources)
 
     @contextmanager
     def connection(self):
@@ -179,6 +199,7 @@ class Store:
             db.close()
 
     def cleanup(self):
+        self.recover_sources()
         now = int(time.time())
         with self.connection() as db:
             db.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,))
@@ -194,6 +215,7 @@ class Store:
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             retained = {row[0] for row in db.execute("SELECT file_path FROM image_drafts")}
+            retained.update(row[0] for row in db.execute("SELECT file_path FROM retained_files"))
             for path in self.images.iterdir():
                 if re.fullmatch(r"[0-9a-f]{32}\.(png|jpg)", path.name) and f"images/{path.name}" not in retained:
                     path.unlink(missing_ok=True)
@@ -227,11 +249,7 @@ class Store:
                     target.write(raw)
                     target.flush()
                     os.fsync(target.fileno())
-                directory_fd = os.open(self.images, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                self.sync_directory(self.images)
                 now = int(time.time())
                 db.execute(
                     "INSERT INTO image_drafts (id, book_id, file_path, sha256, media_type, byte_size, width, height, created_at, expires_at) "
@@ -246,14 +264,38 @@ class Store:
             raise
 
     def recover_sources(self):
-        # A process crash between file creation and commit can leave an orphan.
-        # The write lock prevents racing a different worker's active import.
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
-            retained = {row[0] for row in db.execute("SELECT original_file_path FROM imports")}
-            for path in self.sources.iterdir():
-                if re.fullmatch(r"[0-9a-f]{32}\.md", path.name) and path.name not in retained:
-                    path.unlink()
+            retained = deletion.references(db)
+            for directory in (self.sources, self.images, self.root / "paper-images"):
+                if directory.is_symlink():
+                    raise OSError("数据目录不能是符号链接。")
+                changed = False
+                for staged in directory.glob("*.deleting"):
+                    relative = staged.relative_to(self.root).as_posix().removesuffix(".deleting")
+                    destination = deletion.checked(self, relative)
+                    if staged.is_symlink() or not staged.is_file():
+                        raise OSError("删除暂存文件类型无效。")
+                    if relative in retained:
+                        if destination.exists():
+                            raise OSError("恢复目标已存在。")
+                        staged.rename(destination)
+                    else:
+                        staged.unlink()
+                    changed = True
+                if directory == self.sources:
+                    for path in directory.iterdir():
+                        if re.fullmatch(r"[0-9a-f]{32}\.md", path.name) and 'sources/'+path.name not in retained:
+                            path.unlink()
+                            changed = True
+                if changed:
+                    self.sync_directory(directory)
+
+    def delete_book(self, book_id):
+        deletion.delete(self, book_id)
+
+    def delete_note(self, book_id, note_id):
+        return deletion.delete(self, book_id, note_id)
 
     @staticmethod
     def preview(row):
@@ -286,11 +328,7 @@ class Store:
                     target.write(row["source"])
                     target.flush()
                     os.fsync(target.fileno())
-                directory_fd = os.open(self.sources, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                self.sync_sources()
                 now = int(time.time())
                 db.execute(
                     "INSERT INTO imports VALUES (?, ?, ?, ?, ?, ?, ?)",

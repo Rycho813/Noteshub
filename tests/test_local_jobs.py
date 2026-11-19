@@ -1,3 +1,4 @@
+from contextlib import closing
 """No cloud inference: leased worker protocol, unchanged comments, safe cleanup."""
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -168,7 +169,7 @@ class LocalJobsTests(WebCase):
                 root=Path(tmp)/'restore';restore(root,io.BytesIO(data))
                 self.assertEqual(len(list((root/'paper-images').glob('*'))),expected)
                 import sqlite3
-                with sqlite3.connect(root/'noteshub.sqlite3') as db:
+                with closing(sqlite3.connect(root/'noteshub.sqlite3')) as db, db:
                     self.assertEqual(db.execute('SELECT COUNT(*) FROM paper_ocr_jobs').fetchone()[0],1)
                     self.assertEqual(db.execute('SELECT COUNT(*) FROM paper_worker_tokens WHERE revoked_at IS NULL').fetchone()[0],0)
                     self.assertEqual(db.execute('SELECT COUNT(*) FROM paper_photos WHERE purge_after IS NOT NULL AND purged_at IS NULL').fetchone()[0],0)
@@ -185,7 +186,7 @@ class LocalJobsTests(WebCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)/'restore';restore(root,io.BytesIO(out.getvalue()))
             import sqlite3
-            with sqlite3.connect(root/'noteshub.sqlite3') as db:
+            with closing(sqlite3.connect(root/'noteshub.sqlite3')) as db, db:
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM paper_ocr_jobs WHERE state='pending'").fetchone()[0],1)
 
     def test_real_worker_outbox_replays_result_without_inference_or_duplicate(self):

@@ -1,3 +1,4 @@
+from contextlib import closing
 """Formal archive invariants, genuine v3 upgrades, and portable restore."""
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -34,7 +35,7 @@ def legacy_v3(root):
     source='“旧版原文”旧版一读'.encode()
     (root/image).write_bytes(raw)
     (root/md).write_bytes(source)
-    with sqlite3.connect(root/'noteshub.sqlite3') as db:
+    with closing(sqlite3.connect(root/'noteshub.sqlite3')) as db, db:
         db.executescript(SCHEMA+IMAGE_SCHEMA+OCR_SCHEMA)
         db.execute("INSERT INTO books VALUES ('book','旧书','作者',10)")
         db.execute("INSERT INTO imports VALUES ('import','book','old.md',?,?,'curly-quotes-v1',11)",(hashlib.sha256(source).hexdigest(),Path(md).name))
@@ -249,7 +250,7 @@ class ArchiveMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)/'v3'
             image,md=legacy_v3(root)
-            with sqlite3.connect(root/'noteshub.sqlite3') as db:
+            with closing(sqlite3.connect(root/'noteshub.sqlite3')) as db, db:
                 db.row_factory=sqlite3.Row
                 before={table:[dict(row) for row in db.execute('SELECT * FROM '+table)] for table in ('books','imports','notes','image_drafts','ocr_runs')}
             files={name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in ('account.json',image,md)}
@@ -260,7 +261,7 @@ class ArchiveMigrationTests(unittest.TestCase):
             store=Store(Settings(restored))
             Store(Settings(restored))
             with store.connection() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],6)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],7)
                 self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(),[])
                 for table,rows in before.items():
                     after=[dict(row) for row in db.execute('SELECT * FROM '+table)]
@@ -283,11 +284,11 @@ class ArchiveMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)/'v3'
             legacy_v3(root)
-            with sqlite3.connect(root/'noteshub.sqlite3') as db:
+            with closing(sqlite3.connect(root/'noteshub.sqlite3')) as db, db:
                 db.execute("UPDATE notes SET source_type = 'unsupported-legacy-source'")
             with self.assertRaises(sqlite3.IntegrityError):
                 Store(Settings(root))
-            with sqlite3.connect(root/'noteshub.sqlite3') as db:
+            with closing(sqlite3.connect(root/'noteshub.sqlite3')) as db, db:
                 self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],3)
                 self.assertEqual(db.execute('SELECT first_comment FROM image_drafts').fetchone()[0],'评'*17)
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM notes').fetchone()[0],1)

@@ -1,6 +1,7 @@
 """Offline, whole-data backup/restore. No web endpoints or remote operations."""
 
 import argparse
+from contextlib import closing
 import hashlib
 import io
 import json
@@ -31,8 +32,8 @@ def _allowed(name: str) -> bool:
 def _validate(root: Path, db: sqlite3.Connection) -> list[str]:
     load_account(root)
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (1, 2, 3, 4, 5, 6):
-        raise ValueError("备份工具仅支持数据库 schema v1–v6。")
+    if version not in (1, 2, 3, 4, 5, 6, 7):
+        raise ValueError("备份工具仅支持数据库 schema v1–v7。")
     if db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
         raise ValueError("数据库完整性检查失败。")
     if db.execute("PRAGMA foreign_key_check").fetchall():
@@ -65,17 +66,24 @@ def _validate(root: Path, db: sqlite3.Connection) -> list[str]:
                     or path.is_symlink() or not path.is_file() or path.stat().st_size != byte_size or _digest(path) != checksum):
                 raise ValueError('纸质书图片缺失或校验失败。')
             files.append(name)
+    if version >= 7:
+        for name, checksum, byte_size in db.execute('SELECT file_path,sha256,byte_size FROM retained_files'):
+            path = root / name
+            if (not _allowed(name) or path.is_symlink() or not path.is_file()
+                    or path.stat().st_size != byte_size or _digest(path) != checksum):
+                raise ValueError('保留原图缺失或校验失败。')
+            files.append(name)
     for name in files:
         if (root / name).parent.is_symlink() or (root / name).is_symlink() or not (root / name).is_file():
             raise ValueError("备份文件必须是普通文件。")
-    return sorted(files)
+    return sorted(set(files))
 
 
 def backup(root: Path, output) -> None:
     """Caller stops the app first; lock the database for the whole archive."""
     if not (root / "noteshub.sqlite3").is_file():
         raise ValueError("没有可备份的数据库。")
-    with sqlite3.connect(root / "noteshub.sqlite3", timeout=3) as db:
+    with closing(sqlite3.connect(root / "noteshub.sqlite3", timeout=3)) as db, db:
         if db.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal":
             if db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] != 0:
                 raise ValueError("数据库 WAL 尚在使用，请先停止全部应用写入后重试。")
@@ -124,7 +132,7 @@ def restore(root: Path, source, *, max_bytes: int = 2 * 1024**3) -> None:
             for name, checksum in expected.items():
                 if _digest(stage / name) != checksum:
                     raise ValueError("备份文件校验失败。")
-            with sqlite3.connect(stage / "noteshub.sqlite3") as db:
+            with closing(sqlite3.connect(stage / "noteshub.sqlite3")) as db, db:
                 db.execute("PRAGMA foreign_keys = ON")
                 if set(_validate(stage, db)) != set(expected):
                     raise ValueError("备份包含未引用的文件或缺失数据。")

@@ -1,5 +1,6 @@
 """Offline removal of unarchived V2 drafts only. Stop app and back up first."""
 import argparse
+from contextlib import closing
 from pathlib import Path
 import re
 import sqlite3
@@ -11,13 +12,15 @@ def retire(root: Path, *, apply=False):
     database = root / 'noteshub.sqlite3'
     if not database.is_file() or database.is_symlink():
         raise ValueError('需要已有数据库；先停止测试应用并完整备份。')
-    with sqlite3.connect(database, timeout=3) as db:
+    with closing(sqlite3.connect(database, timeout=3)) as db, db:
         db.execute('PRAGMA foreign_keys=ON')
         db.execute('BEGIN EXCLUSIVE')
-        if db.execute('PRAGMA user_version').fetchone()[0] not in (4, 5, 6):
-            raise ValueError('仅支持 schema v4–v6。')
+        if db.execute('PRAGMA user_version').fetchone()[0] not in (4, 5, 6, 7):
+            raise ValueError('仅支持 schema v4–v7。')
+        retained = {r[0] for r in db.execute('SELECT file_path FROM retained_files')} if db.execute('PRAGMA user_version').fetchone()[0]>=7 else set()
         rows = db.execute('SELECT d.id,d.file_path FROM image_drafts d WHERE NOT EXISTS '
                           '(SELECT 1 FROM notes n WHERE n.image_draft_id=d.id)').fetchall()
+        rows = [(id,name) for id,name in rows if name not in retained]
         for _, name in rows:
             if not re.fullmatch(r'images/[0-9a-f]{32}\.(png|jpg)', name) or (root/name).is_symlink() or (root/'images').is_symlink():
                 raise ValueError('旧草稿路径无效，未执行清理。')

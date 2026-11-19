@@ -1,3 +1,4 @@
+from contextlib import closing
 """Paper notes coexist with Markdown; CAS/retry/upload and migration safety."""
 from concurrent.futures import ThreadPoolExecutor
 import io
@@ -149,13 +150,13 @@ class PaperTests(WebCase):
     def test_real_v4_migration_preserves_all_old_rows_and_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)/'old';image,md=legacy_v3(root)
-            with sqlite3.connect(root/'noteshub.sqlite3') as db:
+            with closing(sqlite3.connect(root/'noteshub.sqlite3')) as db, db:
                 db.executescript(ARCHIVE_SCHEMA)
                 before={table:db.execute('SELECT * FROM '+table).fetchall() for table in ('books','notes','imports','image_drafts','ocr_runs')}
             files={name:(root/name).read_bytes() for name in (image,md,'account.json')}
             store=Store(Settings(root));Store(Settings(root))
             with store.connection() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],6)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],7)
                 self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(),[])
                 for table,rows in before.items(): self.assertEqual(rows,[tuple(r) for r in db.execute('SELECT * FROM '+table)])
             self.assertEqual(files,{name:(root/name).read_bytes() for name in files})

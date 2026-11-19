@@ -185,7 +185,7 @@ def run_batch(client, directory, maximum, recognize):
     for receipt in sorted(outbox.glob('*.json')):
         job_id=receipt.stem
         if not re.fullmatch(r'[0-9a-f]{32}',job_id):raise WorkerError('本机回执文件名无效。')
-        try:client.call('/api/local-ocr/jobs/'+job_id+'/result',json.loads(receipt.read_text()))
+        try:client.call('/api/local-ocr/jobs/'+job_id+'/result',json.loads(receipt.read_text(encoding="utf-8")))
         except LeaseExpired:
             expired=directory/'expired';expired.mkdir(exist_ok=True,mode=0o700)
             receipt.replace(expired/receipt.name)
@@ -197,7 +197,7 @@ def run_batch(client, directory, maximum, recognize):
         receipt.unlink();count+=1
     journal=directory/'claim.json'
     for _ in range(maximum):
-        claim=json.loads(journal.read_text()) if journal.exists() else {'claim_id':uuid.uuid4().hex}
+        claim=json.loads(journal.read_text(encoding="utf-8")) if journal.exists() else {'claim_id':uuid.uuid4().hex}
         private_write(journal,claim)
         task=client.call('/api/local-ocr/claim',claim)
         if not task['job']:
@@ -231,7 +231,7 @@ def main(argv=None):
             print('本地配置已保存；现有配置不会被覆盖。')
         else:
             if not 1<=args.max_jobs<=200:raise WorkerError('--max-jobs 必须为 1–200。')
-            config=json.loads(args.config.read_text())
+            config=json.loads(args.config.read_text(encoding="utf-8"))
             client=Client(config['url'],config['token'])
             # Initialize before claiming, so a missing model does not occupy a lease.
             recognize=create_engine(args.device)

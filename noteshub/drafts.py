@@ -125,7 +125,7 @@ class DraftService:
 
     def image_bytes(self, draft_id):
         with self.store.connection() as db:
-            db.execute('BEGIN')
+            db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT * FROM image_drafts WHERE id = ?', (draft_id,)).fetchone()
             return self.read_image(row)
 

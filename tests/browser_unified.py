@@ -1,5 +1,7 @@
 """Seven-point workflow, synthetic data only, loopback 18081."""
 import argparse
+import sys
+from contextlib import closing
 import base64
 import io
 import json
@@ -193,7 +195,7 @@ def workflow(context, base, tmp, label):
     iframe.get_by_role('button',name='交给电脑识别',exact=True).click()
     expect(iframe.get_by_text('等待电脑领取',exact=False)).to_be_visible()
     # Synthetic worker completion writes only candidate results; no paid or real model call.
-    with sqlite3.connect(tmp/'data'/'noteshub.sqlite3') as db:
+    with closing(sqlite3.connect(tmp/'data'/'noteshub.sqlite3')) as db, db:
         before=db.execute('SELECT original_text,first_comment,second_comment FROM notes WHERE id=?',(note,)).fetchone()
         results=[{'text':'合成候选 '+str(i),'confidence':.9} for i in range(3)]
         db.execute("UPDATE paper_ocr_jobs SET state='succeeded',results_json=?,engine='synthetic-browser',finished_at=? WHERE note_id=?",(json.dumps(results),int(time.time()),note))
@@ -222,14 +224,14 @@ def workflow(context, base, tmp, label):
 def run(name,mode='all'):
     with tempfile.TemporaryDirectory(prefix='noteshub-unified-') as folder:
         tmp=Path(folder);data=tmp/'data'
-        subprocess.run([str(ROOT/'.venv/bin/python'),'-c','from pathlib import Path;import sys;from tests.test_archive import legacy_v3;legacy_v3(Path(sys.argv[1]))',str(data)],cwd=ROOT,check=True,capture_output=True)
+        subprocess.run([sys.executable,'-c','from pathlib import Path;import sys;from tests.test_archive import legacy_v3;legacy_v3(Path(sys.argv[1]))',str(data)],cwd=ROOT,check=True,capture_output=True)
         Image.new('RGB',(320,200),'#ff7755').save(tmp/'one.png');Image.new('RGB',(200,320),'#5577ff').save(tmp/'two.png')
         base='http://127.0.0.1:18081'
         with socket.socket() as sock:
             sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
             sock.bind(('127.0.0.1',18081))
         with (tmp/'server.log').open('w+') as log:
-            server=subprocess.Popen([str(ROOT/'.venv/bin/python'),'-m','uvicorn','noteshub.web:create_app','--factory','--host','127.0.0.1','--port','18081'],cwd=ROOT,env={**os.environ,'NOTESHUB_DATA_DIR':str(data),'NOTESHUB_COOKIE_SECURE':'false','NOTESHUB_OCR_ENABLED':'false'},stdout=log,stderr=log)
+            server=subprocess.Popen([sys.executable,'-m','uvicorn','noteshub.web:create_app','--factory','--host','127.0.0.1','--port','18081'],cwd=ROOT,env={**os.environ,'NOTESHUB_DATA_DIR':str(data),'NOTESHUB_COOKIE_SECURE':'false','NOTESHUB_OCR_ENABLED':'false'},stdout=log,stderr=log)
             try:
                 with httpx.Client(trust_env=False) as client:
                     for _ in range(100):

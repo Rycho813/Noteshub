@@ -11,6 +11,7 @@ idna==3.20
 Jinja2==3.1.6
 markdown-it-py==3.0.0
 MarkupSafe==3.0.4
+Pillow==13.0.0
 mdurl==0.1.2
 pydantic==2.14.1
 pydantic_core==2.50.1
@@ -19,3 +20,8 @@ starlette==1.10.0
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 uvicorn==0.52.1
+tencentcloud-sdk-python-ocr==3.1.193
+tencentcloud-sdk-python-common==3.1.199
+requests==2.34.2
+charset-normalizer==3.5.2
+urllib3==2.8.0

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 from pathlib import Path
 from urllib.parse import quote
 import secrets
@@ -23,8 +24,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from noteshub.auth import load_account, verify
 from noteshub.config import Settings
 from noteshub.db import ImportConflict, Store
+from noteshub.drafts import DraftService, install_routes
 from noteshub.exporter import export_filename, render_book
+from noteshub.images import validate_image
+from noteshub.ocr import TencentOCR
 from noteshub.parser import correct_record, parse_markdown
+from noteshub.paper import PaperService, install_paper, changed
+from noteshub.local_jobs import LocalJobs, cleanup_photos, install_local_jobs
 
 
 PACKAGE = Path(__file__).parent
@@ -34,10 +40,24 @@ COOKIE = "noteshub_session"
 class BodyLimitMiddleware:
     """Bound actual request bytes, even for chunked/false-length uploads."""
 
-    def __init__(self, app, max_bytes):
+    def __init__(self, app, max_bytes, max_image_bytes):
         self.app, self.max_bytes = app, max_bytes
+        self.max_image_bytes = max_image_bytes
+        self.image_slot = asyncio.Semaphore(1)
 
     async def __call__(self, scope, receive, send):
+        is_image = scope["type"] == "http" and scope["method"] == "POST" and bool(
+            (re.fullmatch(r"/api/books/[^/]+/image-drafts", scope["path"]) or
+             re.fullmatch(r"/api/paper/notes/[^/]+/photos/[^/]+", scope["path"])))
+        if is_image:
+            if self.image_slot.locked():
+                response = JSONResponse({"detail": "正在处理另一张图片，请稍后重试。"}, status_code=503)
+                return await response(scope, receive, send)
+            async with self.image_slot:
+                return await self.bounded(scope, receive, send, self.max_image_bytes)
+        return await self.bounded(scope, receive, send, self.max_bytes)
+
+    async def bounded(self, scope, receive, send, limit):
         if scope["type"] != "http" or scope["method"] != "POST":
             return await self.app(scope, receive, send)
         chunks, total = [], 0
@@ -47,7 +67,7 @@ class BodyLimitMiddleware:
                 return
             chunk = message.get("body", b"")
             total += len(chunk)
-            if total > self.max_bytes:
+            if total > limit:
                 response = HTMLResponse("上传或表单过大，请缩小后重试。", status_code=413)
                 return await response(scope, receive, send)
             chunks.append(chunk)
@@ -65,10 +85,11 @@ class BodyLimitMiddleware:
         return await self.app(scope, replay, send)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
     settings = settings or Settings.from_env()
     account = load_account(settings.data_dir)
     store = Store(settings)
+    drafts = DraftService(store, ocr_client if ocr_client is not None else TencentOCR())
     templates = Jinja2Templates(directory=PACKAGE / "templates")
 
     async def cleanup_loop():
@@ -76,8 +97,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await asyncio.sleep(60)
             try:
                 await asyncio.to_thread(store.cleanup)
-            except (OSError, sqlite3.Error):
-                logging.getLogger(__name__).warning("临时预览或源文件清理失败，将在下一轮重试。")
+                await asyncio.to_thread(cleanup_photos, store)
+            except (sqlite3.Error, OSError):
+                logging.getLogger(__name__).warning("临时预览或图片草稿清理失败，将在下一轮重试。")
 
     @asynccontextmanager
     async def lifespan(app):
@@ -88,12 +110,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+            await drafts.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.settings = settings
+    app.state.drafts = drafts
     app.mount("/static", StaticFiles(directory=PACKAGE / "static"), name="static")
-    app.add_middleware(BodyLimitMiddleware, max_bytes=settings.max_upload_bytes + 64 * 1024)
+    app.add_middleware(BodyLimitMiddleware, max_bytes=settings.max_upload_bytes + 64 * 1024,
+                       max_image_bytes=settings.max_image_bytes + 64 * 1024)
 
     @app.middleware("http")
     async def request_context(request, call_next):
@@ -110,9 +135,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        frame_ancestors = "'self'" if request.url.path == "/quick" and request.query_params.get("view") == "ocr" else "'none'"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self'; "
-            "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; "
+            f"frame-ancestors {frame_ancestors}; base-uri 'none'; form-action 'self'"
         )
         return response
 
@@ -253,36 +279,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(f"/books/{book_id}", status_code=303)
 
     @app.get("/books/{book_id}", response_class=HTMLResponse)
-    async def book_page(request: Request, book_id: str, note: str | None = None):
+    async def book_page(request: Request, book_id: str, note: str | None = None, page: int = 1):
         session = require_session(request)
         store.cleanup()
         with store.connection() as db:
             db.execute("BEGIN")
             book = get_book(db, book_id)
             imported = db.execute("SELECT * FROM imports WHERE book_id = ?", (book_id,)).fetchone()
+            markdown_count = db.execute("SELECT COUNT(*) FROM notes WHERE book_id = ? AND source_type = 'zotero'", (book_id,)).fetchone()[0]
             notes = db.execute("SELECT id, status FROM notes WHERE book_id = ? ORDER BY sort_order", (book_id,)).fetchall()
-            current = None
-            index = 0
-            if notes:
-                if note is not None:
-                    index = next((i for i, item in enumerate(notes) if item["id"] == note), -1)
-                    if index == -1:
-                        raise HTTPException(404, "这本书中没有这条笔记。")
-                current = db.execute("SELECT * FROM notes WHERE id = ?", (notes[index]["id"],)).fetchone()
-            elif note is not None:
-                raise HTTPException(404, "这本书中没有这条笔记。")
+            if page < 1:
+                raise HTTPException(422, "页码必须大于零。")
+            if note is not None:
+                index = next((i for i, item in enumerate(notes) if item["id"] == note), -1)
+                if index < 0:
+                    raise HTTPException(404, "这本书中没有这条笔记。")
+                page = index // 30 + 1
+            pages = max(1, (len(notes) + 29) // 30)
+            if page > pages:
+                raise HTTPException(404, "页码不存在。")
+            entries = db.execute("SELECT n.*,p.revision AS paper_revision FROM notes n LEFT JOIN paper_entries p ON p.note_id=n.id WHERE n.book_id=? ORDER BY sort_order LIMIT 30 OFFSET ?", (book_id,(page-1)*30)).fetchall()
             previews = db.execute(
                 "SELECT id, filename FROM previews WHERE book_id = ? AND session_id = ? ORDER BY rowid DESC",
                 (book_id, session["id"]),
             ).fetchall()
-        def note_url(position):
-            return f"/books/{book_id}?note={notes[position]['id']}"
         return render(
             request, "book.html", book=book, imported=imported, notes=notes, previews=previews,
-            current=current, index=index, total=len(notes),
+            entries=entries, page=page, pages=pages, focus_note=note, total=len(notes), markdown_count=markdown_count,
             done=sum(item["status"] == "done" for item in notes),
-            previous_url=note_url(index - 1) if index > 0 else None,
-            next_url=note_url(index + 1) if index + 1 < len(notes) else None,
             export_name=export_filename(book["title"]),
         )
 
@@ -344,6 +368,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(422, "缺少二读内容；如需清空，请明确提交空文本。")
             comment = field(form, "second_comment", max_length=50000)
             status = field(form, "status", max_length=20) if "status" in form else None
+            paper_revision = field(form, "revision", max_length=20) if "revision" in form else None
             if status is not None and status not in {"pending", "done"}:
                 raise HTTPException(422, "处理状态只能是待处理或已完成。")
             if "\x00" in comment:
@@ -355,19 +380,112 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if existing is None:
                     raise HTTPException(404, "笔记不存在或不属于这本书。")
                 actual_status = status if status is not None else existing["status"]
+                paper = db.execute('SELECT revision FROM paper_entries WHERE note_id=?',(note_id,)).fetchone()
+                identical = comment == existing['second_comment'] and actual_status == existing['status']
+                if paper and paper_revision != str(paper['revision']) and not identical:
+                    raise HTTPException(409, '纸质书记录已在其他设备更新，输入仍保留，请复制后刷新核对。')
                 db.execute(
                     "UPDATE notes SET second_comment = ?, status = ?, updated_at = ? WHERE id = ? AND book_id = ?",
                     (comment, actual_status, int(time.time()), note_id, book_id),
                 )
+                if not identical:
+                    changed(db, note_id)
                 progress = db.execute(
                     "SELECT COUNT(*) AS total, COALESCE(SUM(status = 'done'), 0) AS done FROM notes WHERE book_id = ?",
                     (book_id,),
                 ).fetchone()
                 payload = {"note_id": note_id, "second_comment": comment, "status": actual_status,
                            "done": progress["done"], "total": progress["total"]}
+                if paper:
+                    payload['revision'] = db.execute('SELECT revision FROM paper_entries WHERE note_id=?',(note_id,)).fetchone()[0]
         except sqlite3.Error:
             raise HTTPException(503, "保存失败，文字仍在输入框中，请重试。")
         return JSONResponse(payload)
+
+    @app.get("/books/{book_id}/images", response_class=HTMLResponse)
+    async def image_workspace(request: Request, book_id: str):
+        require_session(request)
+        await asyncio.to_thread(store.cleanup)
+        with store.connection() as db:
+            book = get_book(db, book_id)
+            images = db.execute(
+                "SELECT d.*, n.id AS archived_note_id FROM image_drafts d LEFT JOIN notes n ON n.image_draft_id = d.id "
+                "WHERE d.book_id = ? ORDER BY d.created_at DESC, d.rowid DESC", (book_id,),
+            ).fetchall()
+        return render(request, "images.html", book=book,
+                      drafts=[row for row in images if row['archived_note_id'] is None],
+                      archived_images=[row for row in images if row['archived_note_id'] is not None])
+
+    @app.post("/api/books/{book_id}/image-drafts")
+    async def upload_image_draft(request: Request, book_id: str):
+        async with read_form(request) as form:
+            file = form.get("file")
+            if not isinstance(file, UploadFile):
+                raise HTTPException(422, "请选择 PNG 或 JPEG 图片。")
+            with store.connection() as db:
+                get_book(db, book_id)
+            raw = await file.read(settings.max_image_bytes + 1)
+        if len(raw) > settings.max_image_bytes:
+            raise HTTPException(413, "图片不能超过 5 MiB，请缩小识别范围后重试。")
+        try:
+            metadata = await asyncio.to_thread(validate_image, raw, settings)
+            draft_id = await asyncio.to_thread(store.save_image_draft, book_id, raw, metadata)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        except LookupError as exc:
+            raise HTTPException(404, str(exc))
+        except (OSError, sqlite3.Error):
+            raise HTTPException(503, "图片保存失败，请重试；重复提交不会生成重复草稿。")
+        return JSONResponse({"id": draft_id, "location": f"/books/{book_id}/images#draft-{draft_id}"}, status_code=201)
+
+    @app.get("/api/books/{book_id}/image-drafts/context")
+    async def image_upload_context(request: Request, book_id: str):
+        session = require_session(request)
+        with store.connection() as db:
+            get_book(db, book_id)
+        return JSONResponse({"csrf": session["csrf"]})
+
+    @app.get("/books/{book_id}/image-drafts/{draft_id}/file")
+    async def image_draft_file(request: Request, book_id: str, draft_id: str):
+        require_session(request)
+        # Serialize reads with deletion so staging cannot rename the
+        # file between the row lookup and read. Images are bounded to 5 MiB.
+        def read_image():
+            with store.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute(
+                    "SELECT * FROM image_drafts WHERE id = ? AND book_id = ? AND (editing_started = 1 OR expires_at > ? "
+                    "OR EXISTS (SELECT 1 FROM notes WHERE image_draft_id = image_drafts.id))",
+                    (draft_id, book_id, int(time.time())),
+                ).fetchone()
+                if row is None:
+                    return None
+                if not re.fullmatch(r"images/[0-9a-f]{32}\.(png|jpg)", row["file_path"]):
+                    raise OSError("Invalid image path")
+                return (store.root / row["file_path"]).read_bytes(), row["media_type"]
+        try:
+            content = await asyncio.to_thread(read_image)
+        except OSError:
+            raise HTTPException(404, "来源图片缺失，请检查备份或重新上传。")
+        if content is None:
+            raise HTTPException(404, "图片草稿不存在、已取消或已过期。")
+        return Response(content[0], media_type=content[1])
+
+    @app.post("/books/{book_id}/image-drafts/{draft_id}/cancel")
+    async def cancel_image_draft(request: Request, book_id: str, draft_id: str):
+        async with read_form(request):
+            with store.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                if db.execute("SELECT 1 FROM retained_files f JOIN image_drafts d ON d.file_path=f.file_path WHERE d.id=? AND d.book_id=?", (draft_id,book_id)).fetchone():
+                    raise HTTPException(409, "这是已删除笔记保留的原始图片，请通过整书删除清理。")
+                if db.execute("SELECT 1 FROM notes WHERE image_draft_id = ? AND book_id = ?", (draft_id, book_id)).fetchone():
+                    raise HTTPException(409, "这张图片已归档，不能从草稿入口删除正式笔记的来源。")
+                if db.execute("SELECT 1 FROM ocr_runs r JOIN image_drafts d ON d.id = r.draft_id "
+                              "WHERE d.id = ? AND d.book_id = ? AND r.state = 'running'", (draft_id, book_id)).fetchone():
+                    raise HTTPException(409, "图片正在识别，请等待结束后再删除草稿。")
+                db.execute("DELETE FROM image_drafts WHERE id = ? AND book_id = ?", (draft_id, book_id))
+            await asyncio.to_thread(store.cleanup)
+        return RedirectResponse(f"/books/{book_id}/images", status_code=303)
 
     @app.get("/books/{book_id}/export")
     async def export_book(request: Request, book_id: str):
@@ -498,4 +616,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(row['filename'], safe='')}",
         })
 
+    install_routes(app, drafts, render=render, require_session=require_session, read_form=read_form, field=field)
+    paper_body, paper_operation = install_paper(app, PaperService(store), require_session=require_session, render=render,
+                                               account_id=hashlib.sha256(json.dumps(account,sort_keys=True).encode()).hexdigest())
+    install_local_jobs(app, LocalJobs(store), require_session=require_session, body=paper_body, operation=paper_operation)
     return app

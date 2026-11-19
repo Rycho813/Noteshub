@@ -3,6 +3,7 @@
 {% block content %}
 <p class="eyebrow">阅读工作台</p>
 <h1>我的书籍</h1>
+<p><a class="button-link" href="/quick">快速记录 · 可离线</a></p>
 <div class="columns">
   <section>
     <form method="get" action="/" class="search">
@@ -15,7 +16,7 @@
         <a class="book-card" href="/books/{{ book.id }}">
           <h2>{{ book.title }}</h2>
           {% if book.author %}<p>{{ book.author }}</p>{% endif %}
-          <p class="muted">{% if book.imported %}已导入 {{ book.total }} 条笔记 · 已完成 {{ book.done }}/{{ book.total }}{% else %}尚未导入笔记{% endif %}</p>
+          <p class="muted">{% if book.total %}共 {{ book.total }} 条笔记 · 已完成 {{ book.done }}/{{ book.total }}{% else %}尚无正式笔记{% endif %}</p>
         </a>
         <a class="button-link danger book-delete" href="/books/{{ book.id }}/delete" aria-label="删除书籍：{{ book.title }}">删除书籍</a>
       </article>

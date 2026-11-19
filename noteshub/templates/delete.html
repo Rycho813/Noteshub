@@ -8,9 +8,11 @@
   {% if note %}
   <p class="notice error">确定永久删除当前笔记吗？原文、一读评述和二读评述将一起删除，无法撤销。其他笔记和原始导入文件会保留。</p>
   <div class="text original">{{ note.original_text }}</div>
+  <p class="muted">本条来源图片会保留并纳入备份。纸书记录的同步回执和识别任务会清理；删除 ID 会保留以阻止离线副本重新上传。</p>
   <p class="muted">删除后进入下一条笔记；没有下一条时进入上一条；全部删除后显示空状态。</p>
   {% else %}
   <p class="notice error">确定永久删除该书籍及其全部 {{ total }} 条笔记吗？关联的导入记录、临时预览和原始文件也将删除，无法撤销。</p>
+  <p class="muted">包括该书的图片草稿、OCR 历史、纸书图片、识别任务及单条删除时保留的原图。其他书籍的文字、图片和备份不受影响。</p>
   {% endif %}
   <form action="{{ delete_url }}" method="post" class="actions">
     <input type="hidden" name="csrf" value="{{ csrf }}">

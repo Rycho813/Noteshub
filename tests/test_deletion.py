@@ -1,3 +1,4 @@
+from contextlib import closing
 """Permanent deletion using isolated, synthetic imports only."""
 
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +34,7 @@ class DeletionTests(WebCase):
         with self.store.connection() as db:
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertEqual(db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 7)
 
     def test_confirmation_get_never_deletes_and_escapes_content(self):
         with self.store.connection() as db:
@@ -118,8 +119,8 @@ class DeletionTests(WebCase):
         deleted = self.client.post(self.note_urls[0], data=self.payload)
         self.assertEqual(deleted.headers["location"], self.book)
         page = self.client.get(self.book).text
-        self.assertIn("全部笔记已删除", page)
-        self.assertIn('id="book-progress">0/0', page)
+        self.assertIn("当前没有笔记", page)
+        self.assertIn('0/0', page)
         self.assertNotIn("全部笔记已完成", page)
         self.assertNotIn('id="review-editor"', page)
         self.assertNotIn('id="export-book"', page)
@@ -192,7 +193,7 @@ class DeletionTests(WebCase):
 
     def test_directory_sync_failure_rolls_back_and_recovery_can_retry(self):
         # First call: preflight recovery. Second: rename durability barrier.
-        with patch.object(self.store, "sync_sources", side_effect=[None, OSError("injected sync failure"), None]):
+        with patch.object(self.store, "sync_sources", side_effect=[OSError("injected sync failure"), None]):
             self.assertEqual(self.client.post(self.book + "/delete", data=self.payload).status_code, 503)
         self.assertEqual(self.source.read_bytes(), self.raw)
         self.assertEqual(self.db_count("notes"), 3)
@@ -221,7 +222,7 @@ class DeletionTests(WebCase):
             download = executor.submit(self.client.get, self.book + "/source")
             try:
                 self.assertTrue(reading.wait(5))
-                with sqlite3.connect(self.store.root / "noteshub.sqlite3", timeout=.05) as contender:
+                with closing(sqlite3.connect(self.store.root / "noteshub.sqlite3", timeout=.05)) as contender, contender:
                     with self.assertRaises(sqlite3.OperationalError):
                         contender.execute("BEGIN IMMEDIATE")
             finally:

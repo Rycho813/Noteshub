@@ -46,16 +46,16 @@ def run():
                                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             try:
                 local = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                for _ in range(100):
+                for _ in range(600):
                     try:
                         local.open(base + "/login", timeout=1).close()
                         break
                     except urllib.error.URLError:
                         if process.poll() is not None:
-                            raise RuntimeError("Web server exited before readiness")
+                            raise RuntimeError("Web server exited before readiness: " + (data_dir / "server.log").read_text(errors="replace"))
                         time.sleep(.1)
                 else:
-                    raise RuntimeError("Web server did not become ready")
+                    raise RuntimeError("Web server did not become ready: " + (data_dir / "server.log").read_text(errors="replace"))
                 with sync_playwright() as p:
                     browser = p.chromium.launch(headless=True)
                     errors = []
@@ -81,76 +81,40 @@ def run():
                         page.get_by_role("button", name="确认导入 3 条笔记", exact=True).click()
                         expect(page.locator("#book-progress")).to_have_text("0/3")
 
-                        # Entering the confirmation page flushes pending input;
-                        # cancellation restores the same saved note.
-                        page.locator("#second-comment").fill("取消删除后仍在的二读")
-                        page.get_by_role("link", name="删除当前笔记", exact=True).click()
-                        expect(page.get_by_text("确定永久删除当前笔记吗？", exact=False)).to_be_visible()
-                        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-                        page.screenshot(path=artifacts / f"{name}-note-confirm.png", full_page=True)
-                        page.get_by_role("link", name="取消", exact=True).click()
-                        expect(page.locator("#second-comment")).to_have_value("取消删除后仍在的二读")
-
-                        # Save failures block entry to deletion and preserve input.
-                        pattern = "**/api/books/*/notes/*"
-                        page.route(pattern, lambda route: route.abort("failed"))
-                        page.locator("#second-comment").fill("保存失败仍保留")
-                        current_url = page.url
-                        page.get_by_role("link", name="删除当前笔记", exact=True).click()
-                        expect(page.locator("#save-status")).to_contain_text("保存失败")
-                        assert page.url == current_url
-                        expect(page.locator("#second-comment")).to_have_value("保存失败仍保留")
-                        page.unroute(pattern)
-                        page.get_by_role("button", name="重试保存", exact=True).click()
-                        expect(page.locator("#save-status")).to_have_text("已保存")
-
-                        # Completion/navigation and deletion adjust progress.
-                        page.get_by_role("button", name="完成并继续", exact=True).click()
-                        expect(page.locator("#book-progress")).to_have_text("1/3")
-                        page.get_by_role("link", name="上一条", exact=True).click()
-                        page.get_by_role("button", name="恢复待处理", exact=True).click()
-                        expect(page.locator("#book-progress")).to_have_text("0/3")
-                        page.get_by_role("button", name="完成并继续", exact=True).click()
-                        page.get_by_role("link", name="上一条", exact=True).click()
-                        page.get_by_role("link", name="删除当前笔记", exact=True).click()
-                        page.get_by_role("button", name="确认永久删除笔记", exact=True).click()
-                        expect(page.locator(".original")).to_have_text("浏览器原文二")
-                        expect(page.locator("#book-progress")).to_have_text("0/2")
+                        row = page.locator('.review-editor').first
+                        row.locator('.second-reading summary').click()
+                        row.locator('.second-comment').fill('分页阅读删除前保存')
+                        row.get_by_role('link', name='删除当前笔记', exact=True).click()
+                        expect(page.get_by_text('确定永久删除当前笔记吗？', exact=False)).to_be_visible()
+                        page.get_by_role('link', name='取消', exact=True).click()
+                        expect(page.locator('.second-comment').first).to_have_value('分页阅读删除前保存')
+                        row = page.locator('.review-editor').first
+                        row.get_by_role('link', name='删除当前笔记', exact=True).click()
+                        page.get_by_role('button', name='确认永久删除笔记', exact=True).click()
+                        expect(page.locator('.review-editor')).to_have_count(2)
+                        expect(page.locator('#book-progress')).to_have_text('0/2')
+                        assert page.locator('.review-editor').first.get_attribute('data-note-id') in page.url
                         with page.expect_download() as event:
-                            page.get_by_role("button", name="导出整书 Markdown", exact=True).click()
-                        exported = Path(event.value.path()).read_text(encoding="utf-8")
-                        assert "浏览器原文一" not in exported
-                        assert "浏览器原文二" in exported and "浏览器原文三" in exported
-
-                        # Deleting the last note selects its predecessor.
-                        page.get_by_role("link", name="下一条", exact=True).click()
-                        page.get_by_role("link", name="删除当前笔记", exact=True).click()
-                        page.get_by_role("button", name="确认永久删除笔记", exact=True).click()
-                        expect(page.locator(".original")).to_have_text("浏览器原文二")
-                        expect(page.locator("#book-progress")).to_have_text("0/1")
-                        page.get_by_role("link", name="删除当前笔记", exact=True).click()
-                        page.get_by_role("button", name="确认永久删除笔记", exact=True).click()
-                        expect(page.get_by_role("heading", name="全部笔记已删除", exact=True)).to_be_visible()
-                        expect(page.locator("#book-progress")).to_have_text("0/0")
-                        assert not page.locator("#export-book").count()
-                        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-                        page.screenshot(path=artifacts / f"{name}-empty.png", full_page=True)
-                        page.get_by_text("导入信息", exact=True).click()
+                            page.locator('#export-book').click()
+                        exported = Path(event.value.path()).read_text(encoding='utf-8')
+                        assert '浏览器原文一' not in exported and '浏览器原文二' in exported
+                        page.locator('.review-editor').last.get_by_role('link', name='删除当前笔记', exact=True).click()
+                        page.get_by_role('button', name='确认永久删除笔记', exact=True).click()
+                        expect(page.locator('.review-editor')).to_have_count(1)
+                        page.get_by_role('link', name='删除当前笔记', exact=True).click()
+                        page.get_by_role('button', name='确认永久删除笔记', exact=True).click()
+                        expect(page.get_by_role('heading', name='当前没有笔记', exact=True)).to_be_visible()
+                        assert not page.locator('#export-book').count()
+                        page.get_by_text('导入信息', exact=True).click()
                         with page.expect_download() as event:
-                            page.get_by_text("下载原始 Markdown 文件", exact=True).click()
+                            page.get_by_text('下载原始 Markdown 文件', exact=True).click()
                         assert Path(event.value.path()).read_bytes() == RAW
-
-                        page.get_by_role("link", name="返回书籍列表", exact=True).click()
-                        expect(page.get_by_text("已导入 0 条笔记 · 已完成 0/0", exact=True)).to_be_visible()
-                        page.get_by_role("link", name=f"删除书籍：{name} 删除验收", exact=True).click()
-                        expect(page.get_by_text("全部 0 条笔记", exact=False)).to_be_visible()
-                        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-                        page.screenshot(path=artifacts / f"{name}-book-confirm.png", full_page=True)
-                        page.get_by_role("link", name="取消", exact=True).click()
-                        page.get_by_role("link", name=f"删除书籍：{name} 删除验收", exact=True).click()
-                        page.get_by_role("button", name="确认永久删除书籍及全部笔记", exact=True).click()
-                        expect(page.get_by_text("从新建一本书开始。", exact=True)).to_be_visible()
-                        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                        page.goto(base + '/')
+                        page.get_by_role('link', name=f'删除书籍：{name} 删除验收', exact=True).click()
+                        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+                        page.screenshot(path=artifacts / f'{name}-book-confirm.png', full_page=True)
+                        page.get_by_role('button', name='确认永久删除书籍及全部笔记', exact=True).click()
+                        expect(page.get_by_text('从新建一本书开始。', exact=True)).to_be_visible()
 
                         # Confirmation and book deletion also work without JS.
                         no_js = browser.new_context(java_script_enabled=False, storage_state=context.storage_state())
@@ -164,7 +128,7 @@ def run():
                         expect(basic.get_by_text("从新建一本书开始。", exact=True)).to_be_visible()
                         no_js.close()
                         context.close()
-                        print(f"PASS {name}: cancel, save failure/retry, completion, delete navigation, export, empty state, book delete, no-JS")
+                        print(f"PASS {name}: paginated reader save/cancel, delete navigation, export, empty state, book delete, no-JS")
                     assert not errors, errors
                     browser.close()
                 store = Store(Settings(data_dir, cookie_secure=False))

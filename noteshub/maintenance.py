@@ -12,6 +12,7 @@ import sqlite3
 import sys
 import tarfile
 import tempfile
+import time
 
 from noteshub.auth import load_account
 from noteshub.config import Settings
@@ -24,14 +25,15 @@ def _digest(path: Path) -> str:
 
 def _allowed(name: str) -> bool:
     return name in {"account.json", "noteshub.sqlite3", "manifest.json"} or bool(
-        re.fullmatch(r"sources/[0-9a-f]{32}\.md", name)
+        re.fullmatch(r"sources/[0-9a-f]{32}\.md|(?:images|paper-images)/[0-9a-f]{32}\.(png|jpg)", name)
     )
 
 
 def _validate(root: Path, db: sqlite3.Connection) -> list[str]:
     load_account(root)
-    if db.execute("PRAGMA user_version").fetchone()[0] != 1:
-        raise ValueError("备份工具仅支持数据库 schema v1。")
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version not in (1, 2, 3, 4, 5, 6, 7):
+        raise ValueError("备份工具仅支持数据库 schema v1–v7。")
     if db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
         raise ValueError("数据库完整性检查失败。")
     if db.execute("PRAGMA foreign_key_check").fetchall():
@@ -45,10 +47,36 @@ def _validate(root: Path, db: sqlite3.Connection) -> list[str]:
         if path.is_symlink() or not path.is_file() or _digest(path) != checksum:
             raise ValueError("源文件缺失、类型无效或校验失败。")
         files.append(name)
+    if version >= 2:
+        for name, checksum, byte_size, media_type in db.execute(
+            "SELECT file_path, sha256, byte_size, media_type FROM image_drafts"
+        ):
+            if not re.fullmatch(r"images/[0-9a-f]{32}\.(png|jpg)", name):
+                raise ValueError("数据库图片路径无效。")
+            path = root / name
+            expected_type = "image/png" if name.endswith(".png") else "image/jpeg"
+            if (path.is_symlink() or not path.is_file() or path.stat().st_size != byte_size
+                    or media_type != expected_type or _digest(path) != checksum):
+                raise ValueError("图片缺失、类型无效或校验失败。")
+            files.append(name)
+    if version >= 5:
+        for name, checksum, byte_size in db.execute('SELECT file_path,sha256,byte_size FROM paper_photos WHERE purged_at IS NULL'):
+            path = root / name
+            if (not re.fullmatch(r'paper-images/[0-9a-f]{32}\.(png|jpg)', name)
+                    or path.is_symlink() or not path.is_file() or path.stat().st_size != byte_size or _digest(path) != checksum):
+                raise ValueError('纸质书图片缺失或校验失败。')
+            files.append(name)
+    if version >= 7:
+        for name, checksum, byte_size in db.execute('SELECT file_path,sha256,byte_size FROM retained_files'):
+            path = root / name
+            if (not _allowed(name) or path.is_symlink() or not path.is_file()
+                    or path.stat().st_size != byte_size or _digest(path) != checksum):
+                raise ValueError('保留原图缺失或校验失败。')
+            files.append(name)
     for name in files:
-        if (root / name).is_symlink() or not (root / name).is_file():
+        if (root / name).parent.is_symlink() or (root / name).is_symlink() or not (root / name).is_file():
             raise ValueError("备份文件必须是普通文件。")
-    return sorted(files)
+    return sorted(set(files))
 
 
 def backup(root: Path, output) -> None:
@@ -108,12 +136,23 @@ def restore(root: Path, source, *, max_bytes: int = 2 * 1024**3) -> None:
                 db.execute("PRAGMA foreign_keys = ON")
                 if set(_validate(stage, db)) != set(expected):
                     raise ValueError("备份包含未引用的文件或缺失数据。")
-                # Restore content, not active logins or temporary uploads.
+                # Keep image drafts as portable user content, independent of
+                # sessions. Old Markdown previews remain temporary login data.
                 db.execute("PRAGMA journal_mode = DELETE")
                 db.execute("PRAGMA secure_delete = ON")
                 db.execute("DELETE FROM previews")
                 db.execute("DELETE FROM sessions")
+                if db.execute("PRAGMA user_version").fetchone()[0] >= 3:
+                    db.execute("UPDATE ocr_runs SET state = 'failed', error_code = 'Interrupted', finished_at = ? "
+                               "WHERE state = 'running'", (int(time.time()),))
                 db.execute("UPDATE login_guard SET failures = 0, blocked_until = 0 WHERE id = 1")
+                if db.execute('PRAGMA user_version').fetchone()[0] >= 6:
+                    db.execute('UPDATE paper_worker_tokens SET revoked_at=? WHERE revoked_at IS NULL',(int(time.time()),))
+                    db.execute("UPDATE paper_ocr_jobs SET state='pending',worker_id=NULL,lease_hash=NULL,lease_until=NULL WHERE state='running'")
+                    # A restored archive may be older than its deletion deadline.
+                    # Recovery must not immediately purge the images just restored.
+                    db.execute('UPDATE paper_entries SET confirmed_revision=NULL,confirmed_at=NULL')
+                    db.execute('UPDATE paper_photos SET purge_after=NULL WHERE purged_at IS NULL')
             (stage / "manifest.json").unlink()
             for path in stage.iterdir():
                 target = root / path.name

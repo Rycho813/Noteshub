@@ -10,11 +10,12 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
-    "Dockerfile", ".dockerignore", "docker-compose.yml", "docker-compose.https.yml",
+    "Dockerfile", ".dockerignore", "docker-compose.yml", "docker-compose.https.yml", "docker-compose.ocr.yml", "docker-compose.ocr-test.yml",
     ".env.example", "requirements.txt", "constraints.txt", "README.md",
     "deploy/Caddyfile", "deploy/noteshub-backup.service", "deploy/noteshub-backup.timer",
-    "docs/deployment.md", "docs/deployment-validation.md", "docs/backup-operations.md",
-    "scripts/backup.sh", "scripts/restore.sh",
+    "docs/deployment.md", "docs/deployment-validation.md", "docs/backup-operations.md", "docs/v2-image-drafts.md", "docs/v2-ocr.md", "docs/v2-archive.md", "docs/v3-paper-notes.md", "docs/v3-photo-viewer.md", "docs/v3-unified-records.md", "docs/v3-validation.md",
+    "scripts/backup.sh", "scripts/restore.sh", "scripts/check_release.py", "scripts/configure_ocr_credentials.py", "scripts/ocr_test.sh", "docs/ocr-test-runbook.md",
+    "tools/local_ocr/worker.py", "tools/local_ocr/requirements.txt", "tools/local_ocr/README.md",
 )
 
 
@@ -22,7 +23,7 @@ def package(root: Path, output: Path) -> None:
     paths = [root / name for name in FILES]
     paths.extend(path for path in (root / "noteshub").rglob("*")
                  if path.is_file() and "__pycache__" not in path.parts
-                 and path.suffix in {".py", ".html", ".css", ".js"})
+                 and path.suffix in {".py", ".html", ".css", ".js", ".svg", ".webmanifest"})
     entries = {}
     for path in sorted(paths):
         if path.is_symlink() or any((root / parent).is_symlink() for parent in path.relative_to(root).parents if parent != Path('.')):

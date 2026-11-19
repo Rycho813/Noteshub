@@ -174,6 +174,35 @@ class LocalJobsTests(WebCase):
                     self.assertEqual(db.execute('SELECT COUNT(*) FROM paper_worker_tokens WHERE revoked_at IS NULL').fetchone()[0],0)
                     self.assertEqual(db.execute('SELECT COUNT(*) FROM paper_photos WHERE purge_after IS NOT NULL AND purged_at IS NULL').fetchone()[0],0)
 
+    def test_cleanup_unlink_holds_lock_and_failure_can_retry(self):
+        import sqlite3
+        self.completed();self.jobs.confirm(self.note,{'revision':2})
+        with self.store.connection() as db:db.execute('UPDATE paper_photos SET purge_after=1')
+        unlink=Path.unlink;calls=[]
+        def fail_second(path,*args,**kwargs):
+            if path.parent.name=='paper-images':
+                with closing(sqlite3.connect(self.store.root/'noteshub.sqlite3',timeout=.05)) as contender:
+                    with self.assertRaises(sqlite3.OperationalError):contender.execute('BEGIN IMMEDIATE')
+                calls.append(path)
+                if len(calls)==2:raise PermissionError('injected unlink failure')
+            return unlink(path,*args,**kwargs)
+        with patch.object(Path,'unlink',fail_second):
+            with self.assertRaises(OSError):cleanup_photos(self.store)
+        with self.store.connection() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM paper_photos WHERE purged_at IS NOT NULL').fetchone()[0],2)
+        self.assertEqual(len(list((self.store.root/'paper-images').iterdir())),1)
+        cleanup_photos(self.store)
+        self.assertEqual(list((self.store.root/'paper-images').iterdir()),[])
+
+    def test_book_delete_removes_real_cleanup_failure_residual(self):
+        self.completed();self.jobs.confirm(self.note,{'revision':2})
+        with self.store.connection() as db:db.execute('UPDATE paper_photos SET purge_after=1')
+        with patch.object(Path,'unlink',side_effect=PermissionError('injected unlink failure')):
+            with self.assertRaises(OSError):cleanup_photos(self.store)
+        self.store.delete_book(self.book)
+        self.store.cleanup();cleanup_photos(self.store)
+        self.assertEqual(list((self.store.root/'paper-images').iterdir()),[])
+
     def test_running_task_protects_files_and_restores_to_pending(self):
         self.completed();self.jobs.confirm(self.note,{'revision':2})
         self.queue();claim=self.claim()

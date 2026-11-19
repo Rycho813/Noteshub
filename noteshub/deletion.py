@@ -1,4 +1,4 @@
-"""Permanent row deletion with recoverable file staging and retained originals."""
+"""Permanent row and photo deletion with recoverable file staging."""
 import re
 import time
 
@@ -27,9 +27,8 @@ def checked(store, relative):
     return path
 
 
-def remove_paper(db, note_id, book_id, retain):
-    if retain:
-        db.execute('INSERT INTO retained_files SELECT file_path,?,sha256,byte_size FROM paper_photos WHERE note_id=? AND purged_at IS NULL', (book_id,note_id))
+def remove_paper(db, note_id):
+    db.execute("INSERT OR IGNORE INTO deleted_entities SELECT 'photo',id,? FROM paper_photos WHERE note_id=?", (int(time.time()),note_id))
     db.execute('DELETE FROM paper_worker_claims WHERE job_id IN (SELECT id FROM paper_ocr_jobs WHERE note_id=?)', (note_id,))
     for table in ('paper_ocr_jobs','paper_pages','paper_mutations','paper_photos','paper_entries'):
         db.execute(f'DELETE FROM {table} WHERE note_id=?', (note_id,))
@@ -50,34 +49,40 @@ def delete(store, book_id, note_id=None):
             if target:
                 index = notes.index(target)
                 next_id = notes[index+1]['id'] if index+1<len(notes) else (notes[index-1]['id'] if index else None)
-            if not note_id:
+            selected = [target] if target else notes
+            selected_ids = {note['id'] for note in selected}
+            paths = []
+            if note_id:
+                paths += [r[0] for r in db.execute('SELECT file_path FROM paper_photos WHERE note_id=?',(note_id,))]
+                if target['image_draft_id']:
+                    paths += [r[0] for r in db.execute('SELECT file_path FROM image_drafts WHERE id=?',(target['image_draft_id'],))]
+            else:
                 paths = (['sources/'+r[0] for r in db.execute('SELECT original_file_path FROM imports WHERE book_id=?',(book_id,))]
                          + [r[0] for r in db.execute('SELECT file_path FROM image_drafts WHERE book_id=?',(book_id,))]
-                         + [r[0] for r in db.execute('SELECT file_path FROM paper_photos WHERE note_id IN (SELECT id FROM notes WHERE book_id=?) AND purged_at IS NULL',(book_id,))]
+                         + [r[0] for r in db.execute('SELECT file_path FROM paper_photos WHERE note_id IN (SELECT id FROM notes WHERE book_id=?)',(book_id,))]
                          + [r[0] for r in db.execute('SELECT file_path FROM retained_files WHERE book_id=?',(book_id,))])
-                for relative in sorted(set(paths)):
-                    path = checked(store,relative)
-                    # Reject corrupt cross-book references rather than deleting
-                    # another book's original. Paths are unique per asset table.
-                    other = db.execute('SELECT 1 FROM retained_files WHERE file_path=? AND book_id<>?',(relative,book_id)).fetchone()
-                    if relative.startswith('paper-images/'):
-                        other = other or db.execute('SELECT 1 FROM paper_photos p JOIN notes n ON n.id=p.note_id WHERE p.file_path=? AND n.book_id<>?',(relative,book_id)).fetchone()
-                    if relative.startswith('images/'):
-                        other = other or db.execute('SELECT 1 FROM image_drafts WHERE file_path=? AND book_id<>?',(relative,book_id)).fetchone()
-                    if other:
-                        raise OSError('图片存在跨书引用。')
-                    if path.exists():
-                        path.rename(path.with_name(path.name+'.deleting'))
-                        store.sync_directory(path.parent)
-            selected = [target] if target else notes
+            for relative in sorted(set(paths)):
+                path = checked(store,relative)
+                other = db.execute('SELECT 1 FROM retained_files WHERE file_path=? AND book_id<>?',(relative,book_id)).fetchone()
+                if relative.startswith('images/'):
+                    other = other or db.execute('SELECT 1 FROM image_drafts WHERE file_path=? AND book_id<>?',(relative,book_id)).fetchone()
+                if relative.startswith('paper-images/'):
+                    owners = db.execute('SELECT note_id FROM paper_photos WHERE file_path=?',(relative,)).fetchall()
+                    other = other or any(r[0] not in selected_ids for r in owners)
+                if other:
+                    raise OSError('图片存在其他笔记或书籍的引用。')
+                if path.exists():
+                    path.rename(path.with_name(path.name+'.deleting'))
+                    store.sync_directory(path.parent)
             for note in selected:
                 if note['source_type']=='paper':
-                    remove_paper(db,note['id'],book_id,retain=bool(note_id))
-                if note_id and note['image_draft_id']:
-                    db.execute('UPDATE image_drafts SET editing_started=1 WHERE id=?',(note['image_draft_id'],))
-                    db.execute('INSERT OR IGNORE INTO retained_files SELECT file_path,book_id,sha256,byte_size FROM image_drafts WHERE id=?',(note['image_draft_id'],))
+                    remove_paper(db,note['id'])
                 db.execute('INSERT OR IGNORE INTO deleted_entities VALUES (?,?,?)',('note',note['id'],int(time.time())))
                 db.execute('DELETE FROM notes WHERE id=?',(note['id'],))
+                if note_id and note['image_draft_id']:
+                    db.execute('DELETE FROM image_drafts WHERE id=?',(note['image_draft_id'],))
+            if note_id:
+                db.executemany('DELETE FROM retained_files WHERE file_path=? AND book_id=?',[(p,book_id) for p in paths])
             if not note_id:
                 for table in ('previews','imports','image_drafts','retained_files'):
                     db.execute(f'DELETE FROM {table} WHERE book_id=?',(book_id,))

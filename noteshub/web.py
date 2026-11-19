@@ -354,8 +354,8 @@ def create_app(settings: Settings | None = None, *, ocr_client=None) -> FastAPI:
             next_id = store.delete_note(book_id, note_id)
         except LookupError as exc:
             raise HTTPException(404, str(exc))
-        except sqlite3.Error:
-            raise HTTPException(503, "删除失败，笔记未删除，请稍后重试。")
+        except (OSError, sqlite3.Error):
+            raise HTTPException(503, "删除未能全部完成，请返回书籍页面核实；残留照片会在每分钟清理或重启时重试清理。")
         destination = f"/books/{book_id}"
         if next_id:
             destination += f"?note={next_id}"

@@ -68,19 +68,20 @@ class IntegrationTests(WebCase):
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],7)
         self.assertEqual(files,{p:p.read_bytes() for p in files})
 
-    def test_single_paper_delete_keeps_all_original_photos_and_backup(self):
+    def test_single_paper_delete_removes_attached_detached_photos_and_backup(self):
         book=self.books[0]
         self.store.delete_note(book['id'],book['note'])
-        for path in book['paths']:self.assertTrue((self.store.root/path).exists())
+        for path in book['paths'][1:]:self.assertFalse((self.store.root/path).exists())
+        self.assertTrue((self.store.root/book['paths'][0]).exists())
         self.store.cleanup()
         with self.store.connection() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM retained_files').fetchone()[0],2)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM retained_files').fetchone()[0],0)
             self.assertFalse(db.execute('SELECT 1 FROM paper_ocr_jobs WHERE note_id=?',(book['note'],)).fetchone())
         with self.assertRaises(HTTPException) as error:self.paper.sync(book['note'],book['payload'])
         self.assertEqual(error.exception.status_code,410)
         archive=io.BytesIO();backup(self.store.root,archive)
         root=self.store.root/'restore';restore(root,io.BytesIO(archive.getvalue()))
-        for path in book['paths']:self.assertEqual((root/path).read_bytes(),(self.store.root/path).read_bytes())
+        for path in book['paths'][1:]:self.assertFalse((root/path).exists())
         self.store.delete_book(book['id'])
         for path in book['paths']:self.assertFalse((self.store.root/path).exists())
 
@@ -104,18 +105,89 @@ class IntegrationTests(WebCase):
         for path in target['paths']:self.assertTrue((self.store.root/path).exists())
         self.assertFalse(list(self.store.root.rglob('*.deleting')))
 
-    def test_single_image_delete_preserves_source_and_ocr_history(self):
+    def test_single_image_delete_removes_source_and_ocr_history(self):
         book=self.books[0]
         with self.store.connection() as db:
             note=db.execute('SELECT id FROM notes WHERE image_draft_id=?',(book['draft'],)).fetchone()[0]
         self.store.delete_note(book['id'],note);self.store.cleanup()
-        self.assertTrue((self.store.root/book['paths'][0]).exists())
+        self.assertFalse((self.store.root/book['paths'][0]).exists())
         with self.store.connection() as db:
-            self.assertTrue(db.execute('SELECT 1 FROM ocr_runs WHERE draft_id=?',(book['draft'],)).fetchone())
-        self.assertEqual(self.client.post(book['url']+'/image-drafts/'+book['draft']+'/cancel',data={'csrf':self.token()}).status_code,409)
+            self.assertFalse(db.execute('SELECT 1 FROM ocr_runs WHERE draft_id=?',(book['draft'],)).fetchone())
+            self.assertFalse(db.execute('SELECT 1 FROM image_drafts WHERE id=?',(book['draft'],)).fetchone())
+        self.assertEqual(self.client.get('/api/books/'+book['id']+'/image-drafts/'+book['draft']).status_code,404)
         from noteshub.retire_drafts import retire
         self.assertEqual(retire(self.store.root,apply=True)['drafts'],0)
-        self.assertTrue((self.store.root/book['paths'][0]).exists())
+        self.assertFalse((self.store.root/book['paths'][0]).exists())
+
+    def test_purged_residual_is_removed_by_note_and_book_delete(self):
+        for index,book in enumerate(self.books):
+            with self.store.connection() as db:
+                db.execute('UPDATE paper_photos SET purged_at=1 WHERE note_id=?',(book['note'],))
+            if index:self.store.delete_book(book['id'])
+            else:self.store.delete_note(book['id'],book['note'])
+            for path in book['paths'][1:]:self.assertFalse((self.store.root/path).exists())
+
+    def test_single_photo_delete_rollback_restores_files_and_rows(self):
+        book=self.books[0];before=self.snapshot()
+        with self.store.connection() as db:
+            db.execute("CREATE TRIGGER fail_note BEFORE DELETE ON notes BEGIN SELECT RAISE(ABORT,'injected'); END")
+        with self.assertRaises(sqlite3.Error):self.store.delete_note(book['id'],book['note'])
+        self.assertEqual(self.snapshot(),before)
+        for path in book['paths']:self.assertTrue((self.store.root/path).exists())
+        self.assertFalse(list(self.store.root.rglob('*.deleting')))
+
+    def test_single_photo_postcommit_failure_reports_pending_and_recovers(self):
+        book=self.books[0];unlink=Path.unlink
+        def fail(path,*a,**kw):
+            if path.name.endswith('.deleting'):raise PermissionError('injected')
+            return unlink(path,*a,**kw)
+        with patch.object(Path,'unlink',fail):
+            r=self.client.post(book['url']+'/notes/'+book['note']+'/delete',data={'csrf':self.token(),'confirm':'delete'})
+        self.assertEqual(r.status_code,503)
+        self.assertIn('未能全部完成',r.text)
+        Store(self.settings)
+        self.assertFalse(list(self.store.root.rglob('*.deleting')))
+        for path in book['paths'][1:]:self.assertFalse((self.store.root/path).exists())
+
+    def test_deleted_photo_id_and_legacy_retained_path_cannot_be_reused(self):
+        a,b=self.books
+        self.store.delete_note(a['id'],a['note'])
+        with self.assertRaises(HTTPException) as e:self.paper.upload(b['note'],a['photos'][0],picture())
+        self.assertEqual(e.exception.status_code,409)
+        with self.store.connection() as db:
+            p=db.execute('SELECT file_path,sha256,byte_size FROM paper_photos WHERE id=?',(b['photos'][0],)).fetchone()
+            db.execute('INSERT INTO retained_files VALUES (?,?,?,?)',(p['file_path'],b['id'],p['sha256'],p['byte_size']))
+        with self.assertRaises(HTTPException):self.paper.upload(b['note'],b['photos'][0],picture())
+
+    def test_deletion_feed_is_authenticated_and_only_exposes_ids(self):
+        from fastapi.testclient import TestClient
+        with TestClient(self.app,follow_redirects=False) as client:
+            self.assertEqual(client.get('/api/paper/deletions').status_code,401)
+        a,b=self.books
+        self.store.delete_note(a['id'],a['note']);self.store.delete_book(b['id'])
+        rows=self.client.get('/api/paper/deletions').json()['deleted']
+        self.assertIn({'kind':'note','id':a['note']},rows)
+        self.assertIn({'kind':'book','id':b['id']},rows)
+        self.assertIn({'kind':'photo','id':a['photos'][0]},rows)
+        self.assertTrue(all(set(r)=={'kind','id'} and r['kind'] in ('note','book','photo') for r in rows))
+
+    def test_v6_upgrade_preserves_eleven_paper_notes_and_thirty_photos(self):
+        book=self.create_book('置身天下（合成保留验证）').split('/')[-1]
+        raw=picture()
+        for i in range(11):
+            note=uid()
+            self.paper.sync(note,dict(mutation_id=uid(),book_id=book,revision=0,first_comment=f'合成想法 {i}'))
+            for _ in range(3 if i<8 else 2):self.paper.upload(note,uid(),raw)
+        with self.store.connection() as db:
+            before=[tuple(r) for r in db.execute('SELECT * FROM notes WHERE book_id=? ORDER BY sort_order',(book,))]
+            paths=[r[0] for r in db.execute('SELECT file_path FROM paper_photos WHERE note_id IN (SELECT id FROM notes WHERE book_id=?)',(book,))]
+            db.execute('DROP TABLE retained_files');db.execute('DROP TABLE deleted_entities');db.execute('PRAGMA user_version=6')
+        files={p:(self.store.root/p).read_bytes() for p in paths}
+        Store(self.settings);Store(self.settings)
+        with self.store.connection() as db:
+            self.assertEqual(before,[tuple(r) for r in db.execute('SELECT * FROM notes WHERE book_id=? ORDER BY sort_order',(book,))])
+        self.assertEqual(len(before),11);self.assertEqual(len(files),30)
+        self.assertEqual(files,{p:(self.store.root/p).read_bytes() for p in paths})
 
     def test_upgrade_failure_rolls_back_both_new_tables_and_version(self):
         with self.store.connection() as db:

@@ -12,6 +12,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 
 from noteshub.paper import identifier, state, text
+from noteshub.deletion import checked
 
 LEASE_SECONDS = 1800
 RETENTION_SECONDS = 30 * 24 * 3600
@@ -195,9 +196,18 @@ def cleanup_photos(store):
                    "AND EXISTS (SELECT 1 FROM paper_pages p WHERE p.photo_id=paper_photos.id) "
                    "AND NOT EXISTS (SELECT 1 FROM paper_ocr_jobs j WHERE j.note_id=paper_photos.note_id AND j.state IN ('pending','running'))",(now,now))
         paths=[row[0] for row in db.execute('SELECT file_path FROM paper_photos WHERE purged_at IS NOT NULL')]
-    for path in paths:
-        if re.fullmatch(r'paper-images/[0-9a-f]{32}\.(png|jpg)',path):
-            (store.root/path).unlink(missing_ok=True)
+    with store.connection() as db:
+        db.execute('BEGIN IMMEDIATE')
+        # Keep the write lock until unlink: a concurrent note deletion/upload
+        # must not replace a path after this cleanup has selected it.
+        for path in paths:
+            if not re.fullmatch(r'paper-images/[0-9a-f]{32}\.(png|jpg)',path):
+                raise OSError('纸书图片路径无效。')
+            if not db.execute('SELECT 1 FROM paper_photos WHERE file_path=? AND purged_at IS NOT NULL',(path,)).fetchone():
+                continue
+            if db.execute('SELECT 1 FROM retained_files WHERE file_path=?',(path,)).fetchone():
+                continue
+            checked(store,path).unlink(missing_ok=True)
 
 
 def install_local_jobs(app, jobs, *, require_session, body, operation):

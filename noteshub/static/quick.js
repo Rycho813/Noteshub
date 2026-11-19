@@ -8,6 +8,8 @@
   let lastError = '', localFailed = false, syncFailed = false, urls = [], retryTimer;
   const fields = {first_comment:$('quick-thought'),original_text:$('quick-original'),second_comment:$('quick-second')};
   const pendingPhotos = new Map();
+  const deletedNotes = new Set(), deletedBooks = new Set(), deletedPhotos = new Set();
+  let deletionNotice = '';
   const viewer = $('quick-viewer'), viewerImage = $('quick-viewer-image'), viewerStage = $('quick-viewer-stage');
   let viewedPhoto, viewerURL, zoom = 1, photoPaint = 0, viewerResizeFrame;
   function sizeViewer() {
@@ -280,7 +282,9 @@
     for (const id of note.photos) {
       if (note.photo_meta?.find(p => p.id===id)?.purged_at || (await get('photos',key(id)))?.blob) continue;
       const response = await api(endpoint(note.id)+'/photos/'+id);
-      await put('photos',{key:key(id),id,workspace:context.workspace,blob:await response.blob(),uploaded:true});
+      const blob=await response.blob();
+      if (deletedNotes.has(note.id) || deletedBooks.has(note.book_id)) return;
+      await put('photos',{key:key(id),id,note_id:note.id,workspace:context.workspace,blob,uploaded:true});
     }
     if (current.id === note.id) await paintPhotos();
   }
@@ -297,6 +301,9 @@
     fields.first_comment.focus();
   }
   function persist(photo) {
+    if (deletedNotes.has(current.id) || deletedBooks.has(current.book_id)) {
+      return Promise.reject(new Error('记录或书籍已删除，请新建记录。'));
+    }
     pendingSaves++;
     for (const [name,input] of Object.entries(fields)) current[name] = input.value;
     const expected = current.localVersion;
@@ -308,6 +315,7 @@
     saving = saving.catch(() => {}).then(() => transaction(['notes','photos','recoveries','meta'],'readwrite',async tx => {
       const store = tx.objectStore('notes'); const old = await request(store.get(key(value.id)));
       for (const pending of volatile) tx.objectStore('photos').put(pending);
+      if (deletedNotes.has(value.id) || deletedBooks.has(value.book_id)) return true;
       if ((old?.localVersion || 0) !== expected) {
         tx.objectStore('recoveries').put({key:context.workspace+':'+uuid(),note:value});
         return false;
@@ -356,6 +364,7 @@
       first_comment:note.first_comment,second_comment:note.second_comment,photo_ids:photos};
   }
   async function syncOne(note) {
+    if (deletedNotes.has(note.id) || deletedBooks.has(note.book_id)) return;
     if (note.conflict) return;
     try {
       if (note.attempt) note = await sendAttempt(note,null,false);
@@ -375,6 +384,10 @@
       }
       await sendAttempt(note,payload(note),true);
     } catch (e) {
+      if (e.status === 410) {
+        await reconcileDeletions();
+        return;
+      }
       if (e.status === 409) {
         const response = await api(endpoint(note.id)).catch(() => null);
         if (response) {
@@ -420,15 +433,61 @@
   async function refreshContext() {
     const remote = await (await api('/api/paper/context')).json();
     if (context && context.workspace !== remote.workspace) throw new Error('登录账号或服务器已改变。请先导出本机恢复文件，重新打开页面选择正确资料库。');
+    // Absence from a paginated note list is never evidence of deletion.
+    // Only authenticated, explicit server tombstones permit local removal.
+    context = {...remote};
+    await reconcileDeletions();
     remote.books.push(...(await pendingBooks(remote.workspace)).filter(b => !remote.books.some(r => r.id===b.id)));
     context = remote;
     renderBooks();
     await put('meta',{key:'context',value:{...remote,csrf:''}});
     return remote;
   }
+  async function reconcileDeletions() {
+    const result = await (await api('/api/paper/deletions')).json();
+    if (!Array.isArray(result.deleted) || result.deleted.some(d => !['book','note','photo'].includes(d.kind) || typeof d.id !== 'string')) throw new Error('删除状态无效');
+    await saving;
+    if (adding) throw new Error('正在保存照片，请完成后重新同步删除状态。');
+    for (const d of result.deleted) ({book:deletedBooks,note:deletedNotes,photo:deletedPhotos}[d.kind]).add(d.id);
+    const removed = n => n && n.workspace===context.workspace && (deletedNotes.has(n.id) || deletedBooks.has(n.book_id));
+    let count=0;
+    await transaction(['notes','photos','recoveries','meta'],'readwrite',async tx => {
+      const notes=await request(tx.objectStore('notes').getAll());
+      const recoveries=await request(tx.objectStore('recoveries').getAll());
+      const photos=await request(tx.objectStore('photos').getAll());
+      const meta=await request(tx.objectStore('meta').getAll());
+      const keptPhotos=new Set(), removedPhotos=new Set(), removedIds=new Set();
+      for (const n of [...notes,...recoveries.map(r => r.note)]) if (!removed(n)) for (const id of n.photos || []) keptPhotos.add(key(id));
+      for (const n of [...notes,...recoveries.map(r => r.note)]) if (removed(n)) {
+        removedIds.add(n.id);
+        for (const id of [...(n.photos || []),...(n.photo_meta || []).map(p => p.id)]) removedPhotos.add(key(id));
+      }
+      for (const n of notes) if (removed(n)) {tx.objectStore('notes').delete(n.key);count++;}
+      for (const r of recoveries) if (removed(r.note)) tx.objectStore('recoveries').delete(r.key);
+      for (const p of photos) if (p.workspace===context.workspace && (deletedPhotos.has(p.id) || removedPhotos.has(p.key) || removedIds.has(p.note_id)) && !keptPhotos.has(p.key)) {
+        tx.objectStore('photos').delete(p.key);tx.objectStore('meta').delete('uploaded:'+p.key);
+      }
+      for (const m of meta) {
+        if (m.key.startsWith('book:'+context.workspace+':') && deletedBooks.has(m.value?.id)) tx.objectStore('meta').delete(m.key);
+        if (m.key==='lastNote:'+context.workspace && deletedNotes.has(m.value)) tx.objectStore('meta').delete(m.key);
+        if (m.key==='lastBook:'+context.workspace && deletedBooks.has(m.value)) tx.objectStore('meta').delete(m.key);
+      }
+    });
+    context.books=context.books.filter(b => !deletedBooks.has(b.id));
+    if (removed(current)) {
+      for (const [k,p] of pendingPhotos) if (p.note_id===current.id) pendingPhotos.delete(k);
+      closeViewer();
+      current=fresh(context.books[0]?.id || '');
+      for (const input of Object.values(fields)) input.value='';
+      $('quick-copy').hidden=$('quick-remote').hidden=$('quick-formal').hidden=true;
+      await paintPhotos();
+    }
+    if (count) deletionNotice='已清理云端删除的 '+count+' 条本机记录及照片，其他记录继续同步。';
+  }
   async function pull() {
     const remote = await (await api('/api/paper/notes')).json();
     for (const note of remote.notes) await transaction(['notes'],'readwrite',async tx => {
+      if (deletedNotes.has(note.id) || deletedBooks.has(note.book_id)) return;
       const store = tx.objectStore('notes'), old = await request(store.get(key(note.id)));
       if (!old?.dirty && !old?.attempt) store.put({...applyServer(old,note),key:key(note.id)});
     });
@@ -439,7 +498,9 @@
     const run = async () => {
       await refreshContext();
       for(const book of await pendingBooks()) {
-        await api('/api/paper/books/'+book.id,{title:book.title,author:book.author});
+        if (deletedBooks.has(book.id)) continue;
+        try {await api('/api/paper/books/'+book.id,{title:book.title,author:book.author});}
+        catch(e) {if(e.status!==410)throw e;await reconcileDeletions();continue;}
         await transaction(['meta'],'readwrite',tx => {tx.objectStore('meta').delete('book:'+context.workspace+':'+book.id);});
       }
       for (let pass=0;pass<3;pass++) {
@@ -447,7 +508,7 @@
         if (!notes.length) break;
         for (const note of notes) await syncOne(note);
       }
-      await pull(); syncFailed = false; error();
+      await pull(); syncFailed = false; error(deletionNotice);
     };
     try {
       await saving;
@@ -514,7 +575,7 @@
     for (const id of old.photos) {
       const photo = pendingPhotos.get(key(id)) || await get('photos',key(id));
       if (!photo?.blob) throw new Error('另存需要本机图片副本，请联网加载图片后重试');
-      const newId = uuid(); copied.photos.push(newId); photos.push({...photo,id:newId,key:key(newId),uploaded:false});
+      const newId = uuid(); copied.photos.push(newId); photos.push({...photo,id:newId,note_id:copied.id,key:key(newId),uploaded:false});
     }
     copied.dirty = true; copied.localVersion = 1;
     await transaction(['notes','photos'],'readwrite',tx => {
@@ -566,7 +627,7 @@
         const photo = photos.get(source.workspace+':'+id);
         if (!photo) throw new Error('恢复文件缺少图片，未覆盖现有记录');
         const newId = uuid(), bytes = Uint8Array.from(atob(photo.data),c => c.charCodeAt(0));
-        note.photos.push(newId); additions.push({key:key(newId),id:newId,workspace:context.workspace,blob:new Blob([bytes],{type:photo.type}),uploaded:false});
+        note.photos.push(newId); additions.push({key:key(newId),id:newId,note_id:note.id,workspace:context.workspace,blob:new Blob([bytes],{type:photo.type}),uploaded:false});
       }
       note.dirty = true; note.localVersion = 1;
       await transaction(['notes','photos'],'readwrite',tx => { tx.objectStore('notes').put({...note,key:key(note.id)}); additions.forEach(p => tx.objectStore('photos').put(p)); });
@@ -587,10 +648,19 @@
     if(location.hash==='#quick-ocr-section')$('quick-ocr-section').open=true;
     if(new URLSearchParams(location.search).get('view')==='ocr') {document.body.classList.add('quick-ocr-view');$('quick-ocr-section').open=true;}
     if (navigator.onLine) { await pull().catch(() => {}); }
-    const params = new URLSearchParams(location.search), noteId=params.get('note') || (!params.has('book') && (await get('meta','lastNote:'+context.workspace))?.value);
-    if (params.has('note') && !await get('notes',key(noteId))) {
-      const remote = await (await api(endpoint(noteId))).json();
-      await put('notes',{...applyServer(null,remote),key:key(remote.id)});
+    const params = new URLSearchParams(location.search);
+    let noteId=params.get('note') || (!params.has('book') && (await get('meta','lastNote:'+context.workspace))?.value);
+    if (deletedNotes.has(noteId)) {
+      noteId=null;deletionNotice='这条记录已永久删除，请新建记录。其他记录可正常同步。';
+    }
+    if (params.has('note') && noteId && !await get('notes',key(noteId))) {
+      try {
+        const remote = await (await api(endpoint(noteId))).json();
+        await put('notes',{...applyServer(null,remote),key:key(remote.id)});
+      } catch(e) {
+        if(e.status!==410)throw e;
+        await reconcileDeletions();noteId=null;deletionNotice='这条记录已永久删除，请新建记录。其他记录可正常同步。';
+      }
     }
     if (noteId && await get('notes',key(noteId))) await open(noteId);
     else {

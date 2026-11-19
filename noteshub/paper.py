@@ -36,6 +36,8 @@ def state(db, note_id):
     row = db.execute('SELECT n.*, p.revision,p.confirmed_revision,p.confirmed_at FROM notes n '
                      'JOIN paper_entries p ON p.note_id=n.id WHERE n.id=?', (note_id,)).fetchone()
     if row is None:
+        if db.execute("SELECT 1 FROM deleted_entities WHERE kind='note' AND id=?",(note_id,)).fetchone():
+            raise HTTPException(410, '记录已永久删除。')
         raise HTTPException(404, '快速记录不存在。')
     photos = db.execute('SELECT a.* FROM paper_pages p JOIN paper_photos a ON a.id=p.photo_id '
                         'WHERE p.note_id=? ORDER BY p.position', (note_id,)).fetchall()
@@ -124,6 +126,10 @@ class PaperService:
             with self.store.connection() as db:
                 db.execute('BEGIN IMMEDIATE')
                 state(db, note_id)
+                if db.execute("SELECT 1 FROM deleted_entities WHERE kind='photo' AND id=?",(photo_id,)).fetchone():
+                    raise HTTPException(409, '图片编号已删除，请使用新编号。')
+                if db.execute('SELECT 1 FROM retained_files WHERE file_path=?',(relative,)).fetchone():
+                    raise HTTPException(409, '图片编号仍被历史来源占用，请使用新编号。')
                 existing = db.execute('SELECT * FROM paper_photos WHERE id=?', (photo_id,)).fetchone()
                 if existing:
                     if existing['note_id'] != note_id or existing['sha256'] != checksum or existing['purged_at'] is not None:
@@ -222,6 +228,12 @@ def install_paper(app, service, *, require_session, render, account_id):
         with store.connection() as db:
             rows = db.execute('SELECT note_id FROM paper_entries p JOIN notes n ON n.id=p.note_id ORDER BY n.updated_at DESC,n.rowid DESC LIMIT 200').fetchall()
             return {'notes':[state(db,row[0]) for row in rows]}
+
+    @app.get('/api/paper/deletions')
+    async def deletions(request: Request):
+        require_session(request)
+        with store.connection() as db:
+            return {'deleted':[dict(row) for row in db.execute("SELECT kind,id FROM deleted_entities WHERE kind IN ('book','note','photo')")]}
 
     @app.get('/api/paper/notes/{note_id}')
     async def get(request: Request, note_id: str):

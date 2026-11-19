@@ -76,7 +76,15 @@ class Store:
             elif version != 1:
                 raise RuntimeError(f"不支持的数据库版本：{version}")
         self.cleanup()
-        self.recover_sources()
+
+    def sync_sources(self):
+        # Windows has no O_DIRECTORY; production Linux also persists renames.
+        if os.name != "nt":
+            directory_fd = os.open(self.sources, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
 
     @contextmanager
     def connection(self):
@@ -98,6 +106,7 @@ class Store:
         with self.connection() as db:
             db.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,))
             db.execute("DELETE FROM previews WHERE expires_at <= ?", (now,))
+        self.recover_sources()
 
     def recover_sources(self):
         # A process crash between file creation and commit can leave an orphan.
@@ -105,9 +114,76 @@ class Store:
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             retained = {row[0] for row in db.execute("SELECT original_file_path FROM imports")}
+            # A rename is persisted before deleting database rows. After a
+            # crash, the committed database decides whether to restore or purge.
+            for path in self.sources.glob("*.md.deleting"):
+                original = path.name.removesuffix(".deleting")
+                if not re.fullmatch(r"[0-9a-f]{32}\.md", original):
+                    continue
+                if path.is_symlink() or not path.is_file():
+                    raise OSError("删除暂存文件类型无效。")
+                if original in retained:
+                    destination = self.sources / original
+                    if destination.exists() or destination.is_symlink():
+                        raise OSError("源文件恢复目标已存在。")
+                    path.rename(destination)
+                else:
+                    path.unlink()
             for path in self.sources.iterdir():
                 if re.fullmatch(r"[0-9a-f]{32}\.md", path.name) and path.name not in retained:
                     path.unlink()
+            self.sync_sources()
+
+    def delete_book(self, book_id: str):
+        # Resolve previous interrupted deletions before accepting another one.
+        self.recover_sources()
+        try:
+            with self.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                if db.execute("SELECT 1 FROM books WHERE id = ?", (book_id,)).fetchone() is None:
+                    raise LookupError("书籍不存在或已删除。")
+                row = db.execute("SELECT original_file_path FROM imports WHERE book_id = ?", (book_id,)).fetchone()
+                if row:
+                    filename = row["original_file_path"]
+                    if not re.fullmatch(r"[0-9a-f]{32}\.md", filename):
+                        raise OSError("源文件路径无效。")
+                    source = self.sources / filename
+                    if source.is_symlink():
+                        raise OSError("源文件类型无效。")
+                    if source.exists():
+                        if not source.is_file():
+                            raise OSError("源文件类型无效。")
+                        source.rename(self.sources / (filename + ".deleting"))
+                        self.sync_sources()
+                db.execute("DELETE FROM previews WHERE book_id = ?", (book_id,))
+                db.execute("DELETE FROM notes WHERE book_id = ?", (book_id,))
+                db.execute("DELETE FROM imports WHERE book_id = ?", (book_id,))
+                db.execute("DELETE FROM books WHERE id = ?", (book_id,))
+        except BaseException:
+            # connection() has rolled back and released its write lock.
+            self.recover_sources()
+            raise
+        # Failures here leave only unreferenced staging files; cleanup retries
+        # every minute and on startup. Never restore a committed deletion.
+        self.recover_sources()
+
+    def delete_note(self, book_id: str, note_id: str) -> str | None:
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            note = db.execute("SELECT sort_order FROM notes WHERE book_id = ? AND id = ?", (book_id, note_id)).fetchone()
+            if note is None:
+                raise LookupError("笔记不存在、已删除或不属于这本书。")
+            next_note = db.execute(
+                "SELECT id FROM notes WHERE book_id = ? AND sort_order > ? ORDER BY sort_order LIMIT 1",
+                (book_id, note["sort_order"]),
+            ).fetchone()
+            if next_note is None:
+                next_note = db.execute(
+                    "SELECT id FROM notes WHERE book_id = ? AND sort_order < ? ORDER BY sort_order DESC LIMIT 1",
+                    (book_id, note["sort_order"]),
+                ).fetchone()
+            db.execute("DELETE FROM notes WHERE book_id = ? AND id = ?", (book_id, note_id))
+        return next_note["id"] if next_note else None
 
     @staticmethod
     def preview(row):
@@ -140,11 +216,7 @@ class Store:
                     target.write(row["source"])
                     target.flush()
                     os.fsync(target.fileno())
-                directory_fd = os.open(self.sources, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                self.sync_sources()
                 now = int(time.time())
                 db.execute(
                     "INSERT INTO imports VALUES (?, ?, ?, ?, ?, ?, ?)",

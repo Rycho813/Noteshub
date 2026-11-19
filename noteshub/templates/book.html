@@ -10,7 +10,7 @@
     <p>已完成 <strong id="book-progress">{{ done }}/{{ total }}</strong></p>
     {% if current %}<button id="export-book" type="button" class="secondary" disabled>导出整书 Markdown</button>{% endif %}
   </div>
-  <p class="muted" id="export-warning">{% if total > done %}仍有 {{ total - done }} 条待处理；导出会包含全部 {{ total }} 条笔记。{% else %}全部笔记已完成，导出包含整本书。{% endif %}</p>
+  <p class="muted" id="export-warning">{% if not total %}当前没有笔记，无法导出。{% elif total > done %}仍有 {{ total - done }} 条待处理；导出会包含全部 {{ total }} 条笔记。{% else %}全部笔记已完成，导出包含整本书。{% endif %}</p>
   {% if current %}
   <section id="review-editor" class="panel"
     data-save-url="/api/books/{{ book.id }}/notes/{{ current.id }}"
@@ -42,12 +42,19 @@
       {% if next_url %}<a class="button-link secondary" href="{{ next_url }}">下一条</a>{% else %}<span class="nav-disabled">下一条</span>{% endif %}
       <button id="complete-next" type="button" disabled>完成并继续</button>
       <button id="restore-pending" type="button" class="quiet" {% if current.status != 'done' %}hidden{% endif %} disabled>恢复待处理</button>
+      <a class="button-link danger" href="/books/{{ book.id }}/notes/{{ current.id }}/delete">删除当前笔记</a>
     </div>
+  </section>
+  {% else %}
+  <section class="panel">
+    <h2>全部笔记已删除</h2>
+    <p class="muted">本书当前没有笔记，完成统计为 0/0。导入记录与原始文件仍保留，本书不能再次导入。</p>
+    <a href="/">返回书籍列表</a>
   </section>
   {% endif %}
   <details class="panel">
     <summary>导入信息</summary>
-    <p class="muted">已成功导入 {{ total }} 条笔记。本书不能再次导入。</p>
+    <p class="muted">本书已成功导入，当前保留 {{ total }} 条笔记。本书不能再次导入。</p>
     <p><a href="/books/{{ book.id }}/source">下载原始 Markdown 文件</a></p>
   </details>
 {% else %}

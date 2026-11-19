@@ -1,4 +1,5 @@
 import io
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -36,7 +37,7 @@ class BackupTests(WebCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "restored"
             restore(root, io.BytesIO(self.archive()))
-            with sqlite3.connect(root / "noteshub.sqlite3") as db:
+            with closing(sqlite3.connect(root / "noteshub.sqlite3")) as db, db:
                 self.assertEqual(db.execute("SELECT second_comment, status FROM notes").fetchone(), ("备份中的二读", "done"))
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM books").fetchone()[0], 2)
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0], 0)
@@ -102,7 +103,7 @@ class BackupTests(WebCase):
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 restore(root, io.BytesIO(self.archive()))
-                with sqlite3.connect(root / "noteshub.sqlite3") as restored:
+                with closing(sqlite3.connect(root / "noteshub.sqlite3")) as restored, restored:
                     self.assertEqual(restored.execute("SELECT second_comment FROM notes").fetchone()[0], "WAL 中的新评述")
         finally:
             db.close()

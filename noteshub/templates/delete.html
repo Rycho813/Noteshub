@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block title %}确认删除 · {{ book.title }} · Noteshub{% endblock %}
+{% block content %}
+<a class="back" href="{{ cancel_url }}">← 取消并返回</a>
+<h1>{{ '删除当前笔记' if note else '删除书籍' }}</h1>
+<section class="panel">
+  <h2>{{ book.title }}</h2>
+  {% if note %}
+  <p class="notice error">确定永久删除当前笔记吗？原文、一读评述和二读评述将一起删除，无法撤销。其他笔记和原始导入文件会保留。</p>
+  <div class="text original">{{ note.original_text }}</div>
+  <p class="muted">删除后进入下一条笔记；没有下一条时进入上一条；全部删除后显示空状态。</p>
+  {% else %}
+  <p class="notice error">确定永久删除该书籍及其全部 {{ total }} 条笔记吗？关联的导入记录、临时预览和原始文件也将删除，无法撤销。</p>
+  {% endif %}
+  <form action="{{ delete_url }}" method="post" class="actions">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit" name="confirm" value="delete" class="danger">{{ '确认永久删除笔记' if note else '确认永久删除书籍及全部笔记' }}</button>
+    <a class="button-link secondary" href="{{ cancel_url }}">取消</a>
+  </form>
+</section>
+{% endblock %}

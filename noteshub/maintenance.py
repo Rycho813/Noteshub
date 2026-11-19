@@ -1,6 +1,7 @@
 """Offline, whole-data backup/restore. No web endpoints or remote operations."""
 
 import argparse
+from contextlib import closing
 import hashlib
 import io
 import json
@@ -54,7 +55,7 @@ def backup(root: Path, output) -> None:
     """Caller stops the app first; lock the database for the whole archive."""
     if not (root / "noteshub.sqlite3").is_file():
         raise ValueError("没有可备份的数据库。")
-    with sqlite3.connect(root / "noteshub.sqlite3", timeout=3) as db:
+    with closing(sqlite3.connect(root / "noteshub.sqlite3", timeout=3)) as db, db:
         if db.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal":
             if db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] != 0:
                 raise ValueError("数据库 WAL 尚在使用，请先停止全部应用写入后重试。")
@@ -103,7 +104,7 @@ def restore(root: Path, source, *, max_bytes: int = 2 * 1024**3) -> None:
             for name, checksum in expected.items():
                 if _digest(stage / name) != checksum:
                     raise ValueError("备份文件校验失败。")
-            with sqlite3.connect(stage / "noteshub.sqlite3") as db:
+            with closing(sqlite3.connect(stage / "noteshub.sqlite3")) as db, db:
                 db.execute("PRAGMA foreign_keys = ON")
                 if set(_validate(stage, db)) != set(expected):
                     raise ValueError("备份包含未引用的文件或缺失数据。")

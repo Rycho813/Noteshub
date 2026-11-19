@@ -14,7 +14,7 @@ import time
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.datastructures import UploadFile
@@ -76,8 +76,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await asyncio.sleep(60)
             try:
                 await asyncio.to_thread(store.cleanup)
-            except sqlite3.Error:
-                logging.getLogger(__name__).warning("临时预览清理失败，将在下一轮重试。")
+            except (OSError, sqlite3.Error):
+                logging.getLogger(__name__).warning("临时预览或源文件清理失败，将在下一轮重试。")
 
     @asynccontextmanager
     async def lifespan(app):
@@ -257,6 +257,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session = require_session(request)
         store.cleanup()
         with store.connection() as db:
+            db.execute("BEGIN")
             book = get_book(db, book_id)
             imported = db.execute("SELECT * FROM imports WHERE book_id = ?", (book_id,)).fetchone()
             notes = db.execute("SELECT id, status FROM notes WHERE book_id = ? ORDER BY sort_order", (book_id,)).fetchall()
@@ -284,6 +285,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             next_url=note_url(index + 1) if index + 1 < len(notes) else None,
             export_name=export_filename(book["title"]),
         )
+
+    @app.get("/books/{book_id}/delete", response_class=HTMLResponse)
+    async def delete_book_page(request: Request, book_id: str):
+        require_session(request)
+        with store.connection() as db:
+            book = get_book(db, book_id)
+            total = db.execute("SELECT COUNT(*) FROM notes WHERE book_id = ?", (book_id,)).fetchone()[0]
+        return render(request, "delete.html", book=book, note=None, total=total,
+                      cancel_url="/", delete_url=f"/books/{book_id}/delete")
+
+    @app.post("/books/{book_id}/delete")
+    async def delete_book(request: Request, book_id: str):
+        async with read_form(request) as form:
+            if field(form, "confirm", max_length=10) != "delete":
+                raise HTTPException(422, "请在确认页面确认永久删除。")
+        try:
+            store.delete_book(book_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc))
+        except (OSError, sqlite3.Error):
+            raise HTTPException(503, "删除未能全部完成，请返回书籍列表核实后重试；若书籍已消失，残留源文件会在每分钟清理或重启时重试清理。")
+        return RedirectResponse("/", status_code=303)
+
+    @app.get("/books/{book_id}/notes/{note_id}/delete", response_class=HTMLResponse)
+    async def delete_note_page(request: Request, book_id: str, note_id: str):
+        require_session(request)
+        with store.connection() as db:
+            db.execute("BEGIN")
+            book = get_book(db, book_id)
+            note = db.execute("SELECT * FROM notes WHERE book_id = ? AND id = ?", (book_id, note_id)).fetchone()
+        if note is None:
+            raise HTTPException(404, "笔记不存在或不属于这本书。")
+        return render(request, "delete.html", book=book, note=note,
+                      cancel_url=f"/books/{book_id}?note={note_id}",
+                      delete_url=f"/books/{book_id}/notes/{note_id}/delete")
+
+    @app.post("/books/{book_id}/notes/{note_id}/delete")
+    async def delete_note(request: Request, book_id: str, note_id: str):
+        async with read_form(request) as form:
+            if field(form, "confirm", max_length=10) != "delete":
+                raise HTTPException(422, "请在确认页面确认永久删除。")
+        try:
+            next_id = store.delete_note(book_id, note_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc))
+        except sqlite3.Error:
+            raise HTTPException(503, "删除失败，笔记未删除，请稍后重试。")
+        destination = f"/books/{book_id}"
+        if next_id:
+            destination += f"?note={next_id}"
+        return RedirectResponse(destination, status_code=303)
 
     @app.post("/api/books/{book_id}/notes/{note_id}")
     async def save_note(request: Request, book_id: str, note_id: str):
@@ -326,7 +378,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             book = get_book(db, book_id)
             notes = db.execute("SELECT * FROM notes WHERE book_id = ? ORDER BY sort_order", (book_id,)).fetchall()
         if not notes:
-            raise HTTPException(409, "这本书还没有已导入笔记。")
+            raise HTTPException(409, "这本书当前没有笔记可供导出。")
         filename = export_filename(book["title"])
         return Response(
             render_book(book, notes), media_type="text/markdown",
@@ -432,10 +484,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def source_file(request: Request, book_id: str):
         require_session(request)
         with store.connection() as db:
+            # Serialize with deletion until the bounded source is in memory;
+            # a read transaction alone does not prevent a writer's rename.
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM imports WHERE book_id = ?", (book_id,)).fetchone()
-        if row is None:
-            raise HTTPException(404, "没有成功导入的源文件。")
-        return FileResponse(store.sources / row["original_file_path"], filename=row["filename"],
-                            media_type="application/octet-stream")
+            if row is None:
+                raise HTTPException(404, "没有成功导入的源文件。")
+            try:
+                raw = (store.sources / row["original_file_path"]).read_bytes()
+            except OSError:
+                raise HTTPException(503, "源文件暂时不可用，请稍后重试。")
+        return Response(raw, media_type="application/octet-stream", headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(row['filename'], safe='')}",
+        })
 
     return app

@@ -9,6 +9,8 @@
   const fields = {first_comment:$('quick-thought'),original_text:$('quick-original'),second_comment:$('quick-second')};
   const pendingPhotos = new Map();
   const deletedNotes = new Set(), deletedBooks = new Set(), deletedPhotos = new Set();
+  let workspaceBlocked = false, rebinding = false;
+  const localWorkspace = () => context?.storage || context?.workspace;
   let deletionNotice = '';
   const viewer = $('quick-viewer'), viewerImage = $('quick-viewer-image'), viewerStage = $('quick-viewer-stage');
   let viewedPhoto, viewerURL, zoom = 1, photoPaint = 0, viewerResizeFrame;
@@ -146,7 +148,7 @@
       if(index<0)throw new Error('图片已改变，请重新打开');
       current.photos[index]=id;
       let saveError;
-      try {await persist({key:key(id),id,workspace:context.workspace,blob,uploaded:false});} catch(e) {saveError=e;}
+      try {await persist({key:key(id),id,workspace:localWorkspace(),blob,uploaded:false});} catch(e) {saveError=e;}
       await paintPhotos();
       editBusy=false;cancelEdit();viewer.close();finishViewer();
       showPhoto({blob},id,index,current);
@@ -181,7 +183,7 @@
   const get = (store,key) => transaction([store],'readonly',tx => request(tx.objectStore(store).get(key)));
   const all = store => transaction([store],'readonly',tx => request(tx.objectStore(store).getAll()));
   const put = (store,value) => transaction([store],'readwrite',tx => { tx.objectStore(store).put(value); });
-  const key = id => context.workspace + ':' + id;
+  const key = id => localWorkspace() + ':' + id;
   function error(message = '') { lastError = message; $('quick-error').hidden = !message; $('quick-error').textContent = message; }
   function status(message) { $('quick-status').textContent = message; }
   function displayStatus() {
@@ -193,6 +195,8 @@
     status(current?.dirty ? '草稿已保存 · 仅本地保存' : current?.revision ? '已同步' : '可以开始记录');
   }
   async function api(url,payload,blob) {
+    if ((workspaceBlocked || rebinding) && url !== '/api/paper/context') throw new Error('资料库尚未确认，已阻止跨资料库请求。');
+    if ((workspaceBlocked || rebinding) && (payload !== undefined || blob)) throw new Error('资料库尚未确认，已阻止上传。');
     const options = {credentials:'same-origin',redirect:'error',cache:'no-store',signal:AbortSignal.timeout(30000)};
     if (payload !== undefined || blob) Object.assign(options,{method:'POST',headers:{'X-CSRF-Token':context.csrf,'Content-Type':blob ? 'application/octet-stream' : 'application/json'},body:blob || JSON.stringify(payload)});
     const response = await fetch(url,options);
@@ -204,10 +208,10 @@
   }
   const endpoint = id => '/api/paper/notes/' + id;
   function fresh(book) {
-    return {id:uuid(),workspace:context.workspace,book_id:book,original_text:'',first_comment:'',second_comment:'',photos:[],photo_meta:[],revision:0,localVersion:0,dirty:false,updated_at:Date.now()};
+    return {id:uuid(),workspace:localWorkspace(),book_id:book,original_text:'',first_comment:'',second_comment:'',photos:[],photo_meta:[],revision:0,localVersion:0,dirty:false,updated_at:Date.now()};
   }
   async function list() {
-    const notes = (await all('notes')).filter(n => n.workspace === context.workspace).sort((a,b) => b.updated_at-a.updated_at);
+    const notes = (await all('notes')).filter(n => n.workspace === localWorkspace()).sort((a,b) => b.updated_at-a.updated_at);
     $('quick-list').replaceChildren();
     for (const note of notes) {
       const button = document.createElement('button'); button.className = 'secondary';
@@ -256,7 +260,7 @@
     }
   }
   function applyServer(note,remote) {
-    return {...note,...remote,photos:remote.photos.map(p => p.id),photo_meta:remote.photos,workspace:context.workspace,
+    return {...note,...remote,photos:remote.photos.map(p => p.id),photo_meta:remote.photos,workspace:localWorkspace(),
       updated_at:remote.updated_at*1000,localVersion:note?.localVersion || 0,dirty:false,attempt:null,conflict:null};
   }
   async function open(id) {
@@ -264,8 +268,8 @@
     const note = await get('notes',key(id));
     if (!note) return;
     current = note;
-    await put('meta',{key:'lastNote:'+context.workspace,value:note.id});
-    await put('meta',{key:'lastBook:'+context.workspace,value:note.book_id});
+    await put('meta',{key:'lastNote:'+localWorkspace(),value:note.id});
+    await put('meta',{key:'lastBook:'+localWorkspace(),value:note.book_id});
     for (const [name,input] of Object.entries(fields)) input.value = note[name];
     renderBooks();
     $('quick-book').value = note.book_id;
@@ -284,7 +288,7 @@
       const response = await api(endpoint(note.id)+'/photos/'+id);
       const blob=await response.blob();
       if (deletedNotes.has(note.id) || deletedBooks.has(note.book_id)) return;
-      await put('photos',{key:key(id),id,note_id:note.id,workspace:context.workspace,blob,uploaded:true});
+      await put('photos',{key:key(id),id,note_id:note.id,workspace:localWorkspace(),blob,uploaded:true});
     }
     if (current.id === note.id) await paintPhotos();
   }
@@ -295,7 +299,7 @@
     for (const input of Object.values(fields)) input.value = '';
     $('quick-copy').hidden = true; $('quick-remote').hidden = true; $('quick-formal').hidden = true;
     $('quick-book').value = current.book_id;
-    await put('meta',{key:'lastBook:'+context.workspace,value:current.book_id});
+    await put('meta',{key:'lastBook:'+localWorkspace(),value:current.book_id});
     error(); displayStatus(); await paintPhotos();
     document.dispatchEvent(new CustomEvent('quick-note-open',{detail:current}));
     fields.first_comment.focus();
@@ -317,11 +321,11 @@
       for (const pending of volatile) tx.objectStore('photos').put(pending);
       if (deletedNotes.has(value.id) || deletedBooks.has(value.book_id)) return true;
       if ((old?.localVersion || 0) !== expected) {
-        tx.objectStore('recoveries').put({key:context.workspace+':'+uuid(),note:value});
+        tx.objectStore('recoveries').put({key:localWorkspace()+':'+uuid(),note:value});
         return false;
       }
       store.put({...value,key:key(value.id),revision:old?.revision || 0,attempt:old?.attempt || null,conflict:old?.conflict || null});
-      tx.objectStore('meta').put({key:'lastNote:'+context.workspace,value:value.id});
+      tx.objectStore('meta').put({key:'lastNote:'+localWorkspace(),value:value.id});
       return true;
     })).then(async success => {
       if (!success) {
@@ -398,7 +402,7 @@
       throw e;
     }
   }
-  async function pendingBooks(workspace=context?.workspace) { return workspace ? (await all('meta')).filter(m => m.key.startsWith('book:'+workspace+':')).map(m => m.value) : []; }
+  async function pendingBooks(workspace=localWorkspace()) { return workspace ? (await all('meta')).filter(m => m.key.startsWith('book:'+workspace+':')).map(m => m.value) : []; }
   function renderBooks() {
     const selected=current?.book_id || $('quick-book').value;
     const query=$('quick-book-search').value.trim().toLocaleLowerCase();
@@ -412,7 +416,7 @@
   async function selectBook(id) {
     if(adding)throw new Error('正在保存图片，请稍后切换书籍');
     await saving;
-    current.book_id=id;await put('meta',{key:'lastBook:'+context.workspace,value:id});
+    current.book_id=id;await put('meta',{key:'lastBook:'+localWorkspace(),value:id});
     renderBooks();
     if(current.localVersion || current.photos.length || Object.values(fields).some(f => f.value))await persist();
   }
@@ -425,23 +429,65 @@
     creatingBook=true;$('quick-book-create').disabled=true;
     try {
     const book={id:uuid(),title,author};
-    await put('meta',{key:'book:'+context.workspace+':'+book.id,value:book});
+    await put('meta',{key:'book:'+localWorkspace()+':'+book.id,value:book});
     context.books.unshift(book);await put('meta',{key:'context',value:{...context,csrf:''}});
     await selectBook(book.id);$('quick-create-book').open=false;$('quick-book-form').reset();scheduleSync();
     } finally {creatingBook=false;$('quick-book-create').disabled=false;}
   }
-  async function refreshContext() {
-    const remote = await (await api('/api/paper/context')).json();
-    if (context && context.workspace !== remote.workspace) throw new Error('登录账号或服务器已改变。请先导出本机恢复文件，重新打开页面选择正确资料库。');
-    // Absence from a paginated note list is never evidence of deletion.
-    // Only authenticated, explicit server tombstones permit local removal.
-    context = {...remote};
-    await reconcileDeletions();
-    remote.books.push(...(await pendingBooks(remote.workspace)).filter(b => !remote.books.some(r => r.id===b.id)));
-    context = remote;
-    renderBooks();
-    await put('meta',{key:'context',value:{...remote,csrf:''}});
+  function validateContext(remote) {
+    if (!remote || !/^[0-9a-f]{64}$/.test(remote.workspace) || typeof remote.csrf !== 'string'
+        || !Array.isArray(remote.books) || remote.books.some(b => typeof b.id !== 'string' || typeof b.title !== 'string')) {
+      const e = new Error('服务器资料库信息无效，请重新登录后重试。');
+      e.contextInvalid = true;
+      throw e;
+    }
     return remote;
+  }
+  function blockWorkspace() {
+    workspaceBlocked = true;
+    clearTimeout(retryTimer);
+    $('quick-workspace-switch').hidden = false;
+    $('quick-workspace-summary').textContent = '本机资料库与当前登录的服务器资料库不一致，已停止上传和下载到旧资料库。';
+    const e = new Error('请确认是否使用当前服务器资料库；旧资料仍保留在本机，不会自动上传。');
+    e.workspaceMismatch = true;
+    return e;
+  }
+  async function refreshContext() {
+    const remote = validateContext(await (await api('/api/paper/context')).json());
+    const stored = (await get('meta','context'))?.value;
+    if (workspaceBlocked || (context && context.workspace !== remote.workspace)
+        || (context && stored && (stored.storage || stored.workspace) !== localWorkspace())) throw blockWorkspace();
+    context = {...remote,storage:context?.storage};
+    await reconcileDeletions();
+    context.books.push(...(await pendingBooks()).filter(b => !context.books.some(r => r.id===b.id)));
+    renderBooks();
+    await put('meta',{key:'context',value:{...context,csrf:''}});
+    return context;
+  }
+  async function rebindWorkspace() {
+    if (!workspaceBlocked || rebinding || syncing) return;
+    rebinding = true;
+    $('quick-workspace-confirm').disabled = true;
+    try {
+      await saving;
+      if (localFailed || adding || pendingSaves) throw new Error('本机内容尚未保存，请保留本页，完成保存后重试。');
+      // Re-read authenticated identity on confirmation, never trust a stale offer.
+      const remote = validateContext(await (await api('/api/paper/context')).json());
+      const storage = remote.workspace + ':rebind:' + uuid();
+      await transaction(['meta'],'readwrite',tx => {
+        const meta = tx.objectStore('meta');
+        if (context) meta.put({key:'context-history:'+localWorkspace(),value:{...context,csrf:''}});
+        meta.put({key:'context',value:{...remote,storage,csrf:''}});
+      });
+      // Reload drops every old closure, note URL, pending timer and photo request.
+      // A fresh namespace cannot contain old dirty notes or pending books.
+      ready = false;
+      location.replace('/quick');
+    } catch(e) {
+      error('资料库切换未完成：'+e.message+'。旧资料仍保留，请确认登录后重试。');
+      rebinding = false;
+      $('quick-workspace-confirm').disabled = false;
+    }
   }
   async function reconcileDeletions() {
     const result = await (await api('/api/paper/deletions')).json();
@@ -449,7 +495,7 @@
     await saving;
     if (adding) throw new Error('正在保存照片，请完成后重新同步删除状态。');
     for (const d of result.deleted) ({book:deletedBooks,note:deletedNotes,photo:deletedPhotos}[d.kind]).add(d.id);
-    const removed = n => n && n.workspace===context.workspace && (deletedNotes.has(n.id) || deletedBooks.has(n.book_id));
+    const removed = n => n && n.workspace===localWorkspace() && (deletedNotes.has(n.id) || deletedBooks.has(n.book_id));
     let count=0;
     await transaction(['notes','photos','recoveries','meta'],'readwrite',async tx => {
       const notes=await request(tx.objectStore('notes').getAll());
@@ -464,13 +510,13 @@
       }
       for (const n of notes) if (removed(n)) {tx.objectStore('notes').delete(n.key);count++;}
       for (const r of recoveries) if (removed(r.note)) tx.objectStore('recoveries').delete(r.key);
-      for (const p of photos) if (p.workspace===context.workspace && (deletedPhotos.has(p.id) || removedPhotos.has(p.key) || removedIds.has(p.note_id)) && !keptPhotos.has(p.key)) {
+      for (const p of photos) if (p.workspace===localWorkspace() && (deletedPhotos.has(p.id) || removedPhotos.has(p.key) || removedIds.has(p.note_id)) && !keptPhotos.has(p.key)) {
         tx.objectStore('photos').delete(p.key);tx.objectStore('meta').delete('uploaded:'+p.key);
       }
       for (const m of meta) {
-        if (m.key.startsWith('book:'+context.workspace+':') && deletedBooks.has(m.value?.id)) tx.objectStore('meta').delete(m.key);
-        if (m.key==='lastNote:'+context.workspace && deletedNotes.has(m.value)) tx.objectStore('meta').delete(m.key);
-        if (m.key==='lastBook:'+context.workspace && deletedBooks.has(m.value)) tx.objectStore('meta').delete(m.key);
+        if (m.key.startsWith('book:'+localWorkspace()+':') && deletedBooks.has(m.value?.id)) tx.objectStore('meta').delete(m.key);
+        if (m.key==='lastNote:'+localWorkspace() && deletedNotes.has(m.value)) tx.objectStore('meta').delete(m.key);
+        if (m.key==='lastBook:'+localWorkspace() && deletedBooks.has(m.value)) tx.objectStore('meta').delete(m.key);
       }
     });
     context.books=context.books.filter(b => !deletedBooks.has(b.id));
@@ -485,6 +531,7 @@
     if (count) deletionNotice='已清理云端删除的 '+count+' 条本机记录及照片，其他记录继续同步。';
   }
   async function pull() {
+    if (workspaceBlocked || rebinding) throw blockWorkspace();
     const remote = await (await api('/api/paper/notes')).json();
     for (const note of remote.notes) await transaction(['notes'],'readwrite',async tx => {
       if (deletedNotes.has(note.id) || deletedBooks.has(note.book_id)) return;
@@ -493,7 +540,7 @@
     });
   }
   async function sync() {
-    if (!ready || syncing || !navigator.onLine || localFailed) return;
+    if (!ready || workspaceBlocked || rebinding || syncing || !navigator.onLine || localFailed) return;
     syncing = true; displayStatus();
     const run = async () => {
       await refreshContext();
@@ -501,10 +548,10 @@
         if (deletedBooks.has(book.id)) continue;
         try {await api('/api/paper/books/'+book.id,{title:book.title,author:book.author});}
         catch(e) {if(e.status!==410)throw e;await reconcileDeletions();continue;}
-        await transaction(['meta'],'readwrite',tx => {tx.objectStore('meta').delete('book:'+context.workspace+':'+book.id);});
+        await transaction(['meta'],'readwrite',tx => {tx.objectStore('meta').delete('book:'+localWorkspace()+':'+book.id);});
       }
       for (let pass=0;pass<3;pass++) {
-        const notes = (await all('notes')).filter(n => n.workspace === context.workspace && n.book_id && n.dirty && !n.conflict);
+        const notes = (await all('notes')).filter(n => n.workspace === localWorkspace() && n.book_id && n.dirty && !n.conflict);
         if (!notes.length) break;
         for (const note of notes) await syncOne(note);
       }
@@ -513,7 +560,7 @@
     try {
       await saving;
       if(localFailed)return;
-      if (navigator.locks) await navigator.locks.request('noteshub-sync:'+context.workspace,run);
+      if (navigator.locks) await navigator.locks.request('noteshub-sync:'+localWorkspace(),run);
       else await run();
     } catch(e) { syncFailed = true; error('同步失败：'+e.message+'。本机内容仍保留。登录失效时请在另一页登录，再点立即同步。'); }
     finally {
@@ -558,7 +605,7 @@
         $('quick-photo-status').textContent = '正在本机保存图片 '+(index+1)+' / '+files.length;
         const blob = await prepare(file), id = uuid();
         current.photos.push(id);
-        try { await persist({key:key(id),id,workspace:context.workspace,blob,uploaded:false}); }
+        try { await persist({key:key(id),id,workspace:localWorkspace(),blob,uploaded:false}); }
         catch(e) { await paintPhotos();throw e; }
         await paintPhotos();
       }
@@ -604,10 +651,10 @@
     const photos = new Map(data.photos.map(p => [p.key,p]));
     for(const entry of data.meta || []) {
       const book=entry.value;
-      if(typeof entry.key==='string' && entry.key.startsWith('book:'+context.workspace+':') && book && /^[0-9a-f]{32}$/.test(book.id)
+      if(typeof entry.key==='string' && entry.key.startsWith('book:'+localWorkspace()+':') && book && /^[0-9a-f]{32}$/.test(book.id)
         && typeof book.title==='string' && book.title.trim() && book.title.length<=200 && typeof book.author==='string' && book.author.length<=200
         && !context.books.some(b => b.id===book.id)) {
-        await put('meta',{key:'book:'+context.workspace+':'+book.id,value:book});context.books.push(book);
+        await put('meta',{key:'book:'+localWorkspace()+':'+book.id,value:book});context.books.push(book);
       }
     }
     renderBooks();
@@ -620,14 +667,14 @@
       sources.set(identity,note);
     }
     for (const source of sources.values()) {
-      if (source.workspace !== context.workspace || !context.books.some(b => b.id===source.book_id)) throw new Error('恢复文件属于其他账号或书籍，请打开原资料库后恢复');
+      if (source.workspace !== localWorkspace() || !context.books.some(b => b.id===source.book_id)) throw new Error('恢复文件属于其他账号或书籍，请打开原资料库后恢复');
       const note = fresh(source.book_id), additions = [];
       for (const name of Object.keys(fields)) { if (typeof source[name] !== 'string' || source[name].length>50000) throw new Error('恢复文字无效'); note[name] = source[name]; }
       for (const id of source.photos) {
         const photo = photos.get(source.workspace+':'+id);
         if (!photo) throw new Error('恢复文件缺少图片，未覆盖现有记录');
         const newId = uuid(), bytes = Uint8Array.from(atob(photo.data),c => c.charCodeAt(0));
-        note.photos.push(newId); additions.push({key:key(newId),id:newId,note_id:note.id,workspace:context.workspace,blob:new Blob([bytes],{type:photo.type}),uploaded:false});
+        note.photos.push(newId); additions.push({key:key(newId),id:newId,note_id:note.id,workspace:localWorkspace(),blob:new Blob([bytes],{type:photo.type}),uploaded:false});
       }
       note.dirty = true; note.localVersion = 1;
       await transaction(['notes','photos'],'readwrite',tx => { tx.objectStore('notes').put({...note,key:key(note.id)}); additions.forEach(p => tx.objectStore('photos').put(p)); });
@@ -642,14 +689,14 @@
     db = await request(opening);
     db.onversionchange = () => { db.close(); error('本机存储版本已更新，请重新打开页面'); };
     context = (await get('meta','context'))?.value;
-    try { await refreshContext(); } catch(e) { if (!context) throw new Error('首次使用请先联网登录，再打开快速记录。'); error('当前离线或登录失效，仍可保存本机记录。'); }
+    try { await refreshContext(); } catch(e) { if (e.workspaceMismatch || e.contextInvalid || e instanceof SyntaxError) throw e; if (!context) throw new Error('首次使用请先联网登录，再打开快速记录。'); error('当前离线或登录失效，仍可保存本机记录。'); }
     for(const book of await pendingBooks())if(!context.books.some(b => b.id===book.id))context.books.push(book);
     renderBooks();
     if(location.hash==='#quick-ocr-section')$('quick-ocr-section').open=true;
     if(new URLSearchParams(location.search).get('view')==='ocr') {document.body.classList.add('quick-ocr-view');$('quick-ocr-section').open=true;}
     if (navigator.onLine) { await pull().catch(() => {}); }
     const params = new URLSearchParams(location.search);
-    let noteId=params.get('note') || (!params.has('book') && (await get('meta','lastNote:'+context.workspace))?.value);
+    let noteId=params.get('note') || (!params.has('book') && (await get('meta','lastNote:'+localWorkspace()))?.value);
     if (deletedNotes.has(noteId)) {
       noteId=null;deletionNotice='这条记录已永久删除，请新建记录。其他记录可正常同步。';
     }
@@ -664,7 +711,7 @@
     }
     if (noteId && await get('notes',key(noteId))) await open(noteId);
     else {
-      const book=params.get('book') || (await get('meta','lastBook:'+context.workspace))?.value;
+      const book=params.get('book') || (await get('meta','lastBook:'+localWorkspace()))?.value;
       await newNote(context.books.some(b => b.id===book) ? book : context.books[0]?.id || '');
     }
     for (const input of Object.values(fields)) input.addEventListener('input',() => safe(() => persist()));
@@ -699,5 +746,6 @@
   window.NotesHubQuick = {api,endpoint,getContext:() => context,getCurrent:() => current,
     save:async values => { Object.entries(values).forEach(([name,value]) => { if (fields[name]) fields[name].value=value; }); await persist(); },
     sync,flush:async () => {await saving;if(localFailed || adding)throw new Error('本机保存尚未完成');await sync();},open:async () => open(current.id),safe,error};
+  $('quick-workspace-confirm').addEventListener('click',() => safe(rebindWorkspace));
   safe(initialize);
 })();

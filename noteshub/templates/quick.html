@@ -19,6 +19,13 @@
     <h1>先记下想法</h1>
     <p id="quick-status" role="status" aria-live="polite">正在打开本机记录…</p>
     <p id="quick-error" class="notice error" role="alert" hidden></p>
+    <section id="quick-workspace-switch" class="panel" aria-labelledby="quick-workspace-title" hidden>
+      <h2 id="quick-workspace-title">选择当前服务器资料库</h2>
+      <p id="quick-workspace-summary" role="status"></p>
+      <p>确认后建立独立的本地资料库，从当前服务器重新加载书籍和笔记。不会上传旧资料库的未同步笔记、书籍或照片，不会覆盖服务器数据。</p>
+      <p>旧资料仍保留在此浏览器中，本次不会恢复或合并旧资料，也不会清空 IndexedDB。不确认则保持停止同步。</p>
+      <button id="quick-workspace-confirm" type="button">确认使用当前服务器资料库</button>
+    </section>
     <label>搜索书名或作者<input id="quick-book-search" type="search" maxlength="200" placeholder="输入关键词筛选，不改变当前归属"></label>
     <div class="quick-toolbar">
       <label class="grow">当前书籍<select id="quick-book" disabled></select></label>

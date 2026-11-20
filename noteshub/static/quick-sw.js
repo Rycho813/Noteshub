@@ -1,5 +1,5 @@
 /* Cache only the public, empty recorder shell. No API, photo or account data. */
-const CACHE = 'noteshub-quick-v3-delete-photos';
+const CACHE = 'noteshub-quick-v3-workspace-rebind';
 const SHELL = ['/quick','/quick?view=ocr','/static/app.css','/static/quick.css','/static/quick.js','/static/quick-ocr.js',
   '/static/quick.webmanifest','/static/quick-icon.svg'];
 self.addEventListener('install',event => {
